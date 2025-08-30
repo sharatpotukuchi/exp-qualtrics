@@ -1,0 +1,564 @@
+Qualtrics.SurveyEngine.addOnload(function () {
+  // Ensure Next exists, then hard-hide it (don't remove it)
+  var btns = document.getElementById('Buttons');
+  if (!btns) {
+    btns = document.createElement('div');
+    btns.id = 'Buttons';
+    btns.setAttribute('role','navigation');
+    document.body.appendChild(btns);
+  }
+  var next = document.getElementById('NextButton');
+  if (!next) {
+    next = document.createElement('input');
+    next.type = 'button';
+    next.id = 'NextButton';
+    next.name = 'NextButton';
+    next.className = 'NextButton Button';
+    next.value = 'Next';
+    btns.appendChild(next);
+  }
+  function hardHideNext() {
+    btns.style.display = '';
+    btns.style.visibility = 'hidden';
+    btns.style.pointerEvents = 'none';
+    next.style.display = 'inline-block';
+    next.style.visibility = 'hidden';
+    next.style.pointerEvents = 'none';
+    next.disabled = true;
+  }
+  hardHideNext();
+
+  var nextGuard = new MutationObserver(function(){ hardHideNext(); });
+  try { nextGuard.observe(btns, { attributes:true, attributeFilter:['style','class'], subtree:true, childList:true }); } catch(e) {}
+  window.__CCT_NEXT_GUARD__ = nextGuard;
+});
+
+Qualtrics.SurveyEngine.addOnReady(function () {
+  var target = document.getElementById('jspsych-target');
+  if (!target) { console.error('[CCT] #jspsych-target missing'); return; }
+  if (target.getAttribute('data-cct-init') === '1') { console.warn('[CCT] already init'); return; }
+  target.setAttribute('data-cct-init','1');
+  target.innerHTML = '<div style="padding:8px;color:#555;font-size:13px">Loading task…</div>';
+
+  // Helpers ---------------------------------------------------------
+  function addInlineCSS(css) {
+    var s = document.createElement('style'); s.type = 'text/css';
+    s.appendChild(document.createTextNode(css)); document.head.appendChild(s);
+  }
+  function loadCSSOne(list) {
+    return new Promise(function (resolve, reject) {
+      (function tryOne(i){
+        if (i >= list.length) { reject(new Error('All CSS failed')); return; }
+        var href = list[i], link = document.createElement('link');
+        link.rel = 'stylesheet'; link.href = href;
+        link.onload = function(){ resolve(); };
+        link.onerror = function(){ tryOne(i+1); };
+        document.head.appendChild(link);
+      })(0);
+    });
+  }
+  function loadScriptOne(list) {
+    return new Promise(function (resolve, reject) {
+      (function tryOne(i){
+        if (i >= list.length) { reject(new Error('All JS failed')); return; }
+        var src = list[i];
+        if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+        var s = document.createElement('script'); s.src = src; s.async = false;
+        s.onload = function(){ resolve(); };
+        s.onerror = function(){ tryOne(i+1); };
+        document.head.appendChild(s);
+      })(0);
+    });
+  }
+
+  function showNextEnable() {
+    try { if (window.__CCT_NEXT_GUARD__) window.__CCT_NEXT_GUARD__.disconnect(); } catch(e){}
+    try { this.showNextButton(); } catch(e){}
+    var btns = document.getElementById('Buttons');
+    var next = document.getElementById('NextButton');
+    if (btns) { btns.style.visibility = 'visible'; btns.style.pointerEvents = 'auto'; }
+    if (next) { next.style.visibility = 'visible'; next.style.pointerEvents = 'auto'; next.disabled = false; next.removeAttribute('aria-hidden'); }
+  }
+  function clickNext() {
+    var next = document.getElementById('NextButton');
+    if (next) next.click(); else { try { this.clickNextButton(); } catch(e){} }
+  }
+
+  // URLs ------------------------------------------------------------
+  var URLS_JSP_CSS  = [
+    'https://cdn.jsdelivr.net/npm/jspsych@7.3.0/css/jspsych.css',
+    'https://unpkg.com/jspsych@7.3.0/css/jspsych.css'
+  ];
+  var URLS_JSP_CORE = [
+    'https://cdn.jsdelivr.net/npm/jspsych@7.3.0/dist/index.browser.js',
+    'https://unpkg.com/jspsych@7.3.0/dist/index.browser.js'
+  ];
+  var URLS_PLUGIN_BTN = [
+    'https://cdn.jsdelivr.net/npm/@jspsych/plugin-html-button-response@2.0.0/dist/index.browser.js',
+    'https://unpkg.com/@jspsych/plugin-html-button-response@2.0.0/dist/index.browser.js'
+  ];
+  var URLS_PLUGIN_CCT = [
+    'https://cdn.jsdelivr.net/npm/@jspsych-contrib/plugin-columbia-card-task@1.0.0/dist/index.browser.js',
+    'https://unpkg.com/@jspsych-contrib/plugin-columbia-card-task@1.0.0/dist/index.browser.js'
+  ];
+
+  // Styles ----------------------------------------------------------
+  addInlineCSS(
+    '#jspsych-target, #jspsych-target *{font-family:Arial,Helvetica,sans-serif!important;color:#000!important;}' +
+    '#jspsych-target .jspsych-html-button-response-btngroup{display:block!important;text-align:center!important;margin-top:12px!important;visibility:visible!important;opacity:1!important;}' +
+    '#jspsych-target .jspsych-btn{display:inline-block!important;padding:10px 18px!important;margin:16px auto!important;min-width:140px!important;background:#e0e0e0!important;border:1px solid #999!important;border-radius:4px!important;font-size:16px!important;line-height:1.2!important;text-align:center!important;cursor:pointer!important;}' +
+    '#jspsych-target .cct-header{display:flex;flex-direction:column;gap:6px;padding:8px 12px;margin:6px 0 10px 0;border:1px solid #ddd;border-radius:6px;background:#fafafa;}' +
+    '#jspsych-target .cct-badge{font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid #bbb;white-space:nowrap;}' +
+    '#jspsych-target .cct-badge.hot{background:#ffe8e8;}' +
+    '#jspsych-target .cct-badge.cold{background:#e8f1ff;}' +
+    '#jspsych-target .cct-badge.practice{background:#eee;}' +
+    '#jspsych-target .cct-badge.live{background:#d1ffd1;}' +
+    '#jspsych-target .cct-round{font-size:15px;font-weight:bold;}' +
+    '#jspsych-target .cct-meta{font-size:13px;opacity:.9;white-space:nowrap;}' +
+    '#jspsych-target .cct-instr{font-size:12.5px;line-height:1.35;color:#333;opacity:.95;}' +
+    /* --- COLD: card-face mask (reveal only at END ROUND) --- */
+    '#jspsych-target .cct-card{position:relative;}' +
+    '#jspsych-target.cct-cold .cct-card.flipped{color:transparent!important;background:#4f4f4f!important;}' +
+    '#jspsych-target.cct-cold .cct-card.flipped::after{content:"?";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;}' +
+    '#jspsych-target.cct-cold .cct-card.flipped{outline:2px dashed #bbb!important;outline-offset:-3px;}' +
+    '#jspsych-target.cct-cold .cct-card.flipped *{visibility:hidden!important;}'
+  );
+
+  // ===== Improved Header =====
+  function headerHTML(roundIdx, total, hot, phase, gain, loss, nGain, nLoss) {
+    var instr = hot
+      ? 'This is a <b>HOT</b> round. You can end the round at any time. If you turn a <b>Loss Card</b>, the round ends automatically.'
+      : 'This is a <b>COLD</b> round. Points feedback is hidden until you press <b>END ROUND</b>.';
+
+    var phaseBadge = (phase === 'practice')
+      ? '<span class="cct-badge practice">Practice</span>'
+      : '<span class="cct-badge live">Live</span>';
+
+    return '' +
+      '<div class="cct-header">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;width:100%">' +
+          '<div class="cct-round">Round ' + roundIdx + '/' + total + '</div>' +
+          '<div>' +
+            '<span class="cct-badge ' + (hot ? 'hot' : 'cold') + '">' + (hot ? 'HOT' : 'COLD') + '</span> ' +
+            phaseBadge +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:4px;display:flex;gap:10px;flex-wrap:wrap;">' +
+          '<span class="cct-badge">Deck: Gain Cards <b>' + nGain + '</b>, Loss Cards <b>' + nLoss + '</b></span>' +
+          '<span class="cct-badge">Points: Gain <b>+' + gain + '</b>, Loss <b>-'+ loss + '</b></span>' +
+        '</div>' +
+        '<div class="cct-instr" style="margin-top:4px;">' + instr + '</div>' +
+      '</div>';
+  }
+
+  // Boot ------------------------------------------------------------
+  (function boot(){
+    loadCSSOne(URLS_JSP_CSS)
+    .then(function(){ return loadScriptOne(URLS_JSP_CORE); })
+    .then(function(){ return loadScriptOne(URLS_PLUGIN_BTN); })
+    .then(function(){ return loadScriptOne(URLS_PLUGIN_CCT); })
+    .then(function(){
+      if (typeof window.initJsPsych !== 'function') throw new Error('jsPsych missing');
+      var HtmlBtn = window.jsPsychHtmlButtonResponse;
+      var CCT     = window.jsPsychPluginColumbiaCardTask;
+      if (!HtmlBtn) throw new Error('html-button-response missing');
+      if (!CCT)     throw new Error('CCT plugin missing');
+
+      window._globalJsPsych = window.initJsPsych({
+        display_element: 'jspsych-target',
+        on_finish: function(){
+          try {
+            var rows = window._globalJsPsych.data.get().values();
+            Qualtrics.SurveyEngine.setEmbeddedData('CCT_data', JSON.stringify(rows));
+            var d = window._globalJsPsych.data.get().filter({ task:'cct' });
+            var total_points = d.select('outcome').sum();
+            var mean_cards   = d.select('cards_turned').mean();
+            var loss_rate    = d.select('loss').mean();
+            Qualtrics.SurveyEngine.setEmbeddedData('CCT_total_points', total_points);
+            Qualtrics.SurveyEngine.setEmbeddedData('CCT_mean_cards',   mean_cards);
+            Qualtrics.SurveyEngine.setEmbeddedData('CCT_loss_rate',    loss_rate);
+          } catch(e){}
+          showNextEnable();
+          setTimeout(function(){ clickNext(); }, 350);
+        }
+      });
+
+      var jsPsych = window._globalJsPsych;
+
+      // ============ Instructions (dynamic total) ============
+      var PRACTICE = [
+        {hot:true,  L:1, g:30, loss:250}, // easy hot
+        {hot:false, L:1, g:20, loss:250}, // easy cold
+        {hot:true,  L:2, g:20, loss:500}, // moderate hot
+      ];
+
+      // Build main 24 (3×3×3 minus 3 combos) -----------------
+      var L_levels = [1,2,3];
+      var g_levels = [10,20,30];
+      var loss_levels = [250,500,750];
+
+      // All 27
+      var MAIN27 = [];
+      L_levels.forEach(function(L){
+        g_levels.forEach(function(g){
+          loss_levels.forEach(function(loss){
+            MAIN27.push({L:L, g:g, loss:loss});
+          });
+        });
+      });
+      // Remove 3 to get 24 (balanced; each factor level appears 8×)
+      var removeSet = [
+        {L:1, g:10, loss:750},
+        {L:2, g:20, loss:500},
+        {L:3, g:30, loss:250},
+      ];
+      function sameCond(a,b){ return a.L===b.L && a.g===b.g && a.loss===b.loss; }
+      var MAIN24 = MAIN27.filter(function(c){
+        return !removeSet.some(function(r){ return sameCond(c,r); });
+      });
+
+      // Block labels: 6 Hot, 6 Cold, 6 Hot, 6 Cold -----------
+      var CONDITION_FLAGS = ["hot","hot","hot","hot","hot","hot",
+                             "cold","cold","cold","cold","cold","cold",
+                             "hot","hot","hot","hot","hot","hot",
+                             "cold","cold","cold","cold","cold","cold"];
+
+      // Greedy friendly ordering seed (lower L, higher g, smaller loss first)
+      MAIN24.sort(function(a,b){
+        if (a.L !== b.L) return a.L - b.L;
+        if (a.g !== b.g) return b.g - a.g;
+        return a.loss - b.loss;
+      });
+
+      // Split into 4 blocks of 6
+      var blocks = [ MAIN24.slice(0,6), MAIN24.slice(6,12), MAIN24.slice(12,18), MAIN24.slice(18,24) ];
+
+      // Fisher–Yates
+      function shuffle(arr){
+        var a = arr.slice();
+        for (var i=a.length-1;i>0;i--){
+          var j = Math.floor(Math.random()*(i+1));
+          var t = a[i]; a[i]=a[j]; a[j]=t;
+        }
+        return a;
+      }
+      // Validate “≤3 same L in a row”
+      function validNoMoreThan3SameL(seq){
+        var run = 1;
+        for (var i=1;i<seq.length;i++){
+          if (seq[i].L === seq[i-1].L) { run++; if (run>3) return false; }
+          else run = 1;
+        }
+        return true;
+      }
+      // Constrained shuffle within blocks (retry until valid)
+      function constrainedShuffle(blocks){
+        var order;
+        var attempts = 0;
+        do {
+          attempts++;
+          var shufBlocks = blocks.map(shuffle);
+          order = [].concat(shufBlocks[0], shufBlocks[1], shufBlocks[2], shufBlocks[3]);
+          // map hot/cold flags by index
+          order = order.map(function(c,i){ c.hot = (CONDITION_FLAGS[i] === 'hot'); return c; });
+        } while(!validNoMoreThan3SameL(order) && attempts < 200);
+        return order;
+      }
+
+      var ORDER24 = constrainedShuffle(blocks);
+
+      // Dynamic counts
+      var N_TRIALS_MAIN = ORDER24.length;     // 24
+      var N_TRIALS_TOTAL = PRACTICE.length + N_TRIALS_MAIN; // 27
+
+      // -------- UI helpers / headers / masking ----------
+      var instructions = {
+        type: HtmlBtn,
+        stimulus:
+          '<div style="max-width:760px;margin:0 auto;text-align:left;line-height:1.6">' +
+            '<h2>Card Turning Game</h2>' +
+            '<p><b>Goal:</b> Finish with as many points as possible across <b><span id="cct-round-count"></span> rounds</b>.</p>' +
+            '<h3 style="margin:10px 0 6px;">How a round works</h3>' +
+            '<ul>' +
+              '<li>Each round has a deck with many <b>gain cards</b> and at least one <b>loss card</b>.</li>' +
+              '<li>Turning a gain card <b>adds points</b> (e.g., <b>+10</b>).</li>' +
+              '<li>Turning a loss card <b>subtracts points</b> and you <b>lose</b> that amount for the round (e.g., <b>-250</b>).</li>' +
+              '<li>The exact payoffs and number of loss cards for this round are <b>shown above the deck</b>.</li>' +
+            '</ul>' +
+            '<h3 style="margin:10px 0 6px;">Two Different Round Types</h3>' +
+            '<p><b>HOT</b>: You see point feedback after each card. If you hit a <b>Loss Card</b>, the round ends automatically.</p>' +
+            '<p><b>COLD</b>: Point feedback is hidden until you press <b>END ROUND</b>. After reveal, no further cards can be selected.</p>' +
+            '<p style="margin-top:8px;"><b>Tip:</b> You can stop a round and take the points at any time by pressing <b>END ROUND</b>.</p>' +
+            '<div style="text-align:center;margin-top:16px;"><div id="cct-begin" class="jspsych-btn" role="button" tabindex="0">Begin</div></div>' +
+          '</div>',
+        choices: [],
+        button_html: [],
+        on_load: function(){
+          var el = document.getElementById('cct-round-count');
+          if (el) el.textContent = N_TRIALS_TOTAL;
+          var b = document.getElementById('cct-begin');
+          if (b) {
+            b.addEventListener('click', function(){ jsPsych.finishTrial({screen:'instructions'}); });
+            b.addEventListener('keydown', function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); b.click(); }});
+          }
+        },
+        data: { screen:'instructions' }
+      };
+
+      function renameStopToEndRound() {
+        var host = document.getElementById('jspsych-target');
+        var btns = host.querySelectorAll('button, input[type="button"], .jspsych-btn, [role="button"]');
+        btns.forEach(function(b){
+          var txt = (b.textContent || b.value || '').trim().toLowerCase();
+          if (txt === 'stop') { if (b.tagName === 'INPUT') b.value = 'END ROUND'; else b.textContent = 'END ROUND'; }
+        });
+      }
+      function lockInteraction(root){ if (root) root.style.pointerEvents = 'none'; }
+      function unlockInteraction(root){ if (root) root.style.pointerEvents = 'auto'; }
+      function disableCards(root){
+        if (!root) return;
+        root.querySelectorAll('.cct-card').forEach(function(el){
+          el.style.pointerEvents = 'none';
+          el.setAttribute('data-cct-locked','1');
+        });
+      }
+      function enableCards(root){
+        if (!root) return;
+        root.querySelectorAll('.cct-card').forEach(function(el){
+          if (el.getAttribute('data-cct-locked') === '1') el.removeAttribute('data-cct-locked');
+          el.style.pointerEvents = '';
+        });
+      }
+
+      // ---- HOT: auto end on loss via finishTrial ----
+      function attachHotEndByFinishTrial(lossAmount) {
+        var host = document.getElementById('jspsych-target');
+        if (!host) return function(){};
+
+        var ended = false;
+        var jsPsych = window._globalJsPsych;
+
+        function parsePoints(){
+          var nodes = host.querySelectorAll('*');
+          for (var i=0; i<nodes.length; i++){
+            var t = (nodes[i].textContent || '').replace(/\u2212/g,'-').trim();
+            if (/^\s*Points\s*:\s*-?\s*\d+\s*$/.test(t)) {
+              var m = t.match(/-?\s*\d+/); if (m) return parseInt(m[0].replace(/\s/g,''), 10);
+            }
+          }
+          return null;
+        }
+        function hasFlippedLoss(){
+          var cards = host.querySelectorAll('.cct-card.flipped');
+          for (var i=0; i<cards.length; i++){
+            var card = cards[i];
+            var lossFound = false;
+            card.childNodes.forEach(function(node) {
+              var nodeText = (node.textContent || '').replace(/\u2212/g,'-').trim();
+              if (/[-?]\s*\d+/.test(nodeText)) { lossFound = true; }
+            });
+            if (lossFound) return true;
+          }
+          return false;
+        }
+        function cardsTurned(){ return host.querySelectorAll('.cct-card.flipped').length; }
+
+        function tryEndAfter() {
+          if (ended) return; ended = true;
+          var outcome = parsePoints();
+          var lossHit = hasFlippedLoss();
+          disableCards(host); // cards only
+          if (jsPsych && typeof jsPsych.finishTrial === 'function') {
+            jsPsych.finishTrial({
+              outcome: outcome,
+              cards_turned: cardsTurned(),
+              loss: lossHit ? 1 : 0,
+              forced_end_on_loss: true
+            });
+          }
+        }
+
+        var mo = new MutationObserver(function(){
+          if (!ended && hasFlippedLoss()) { tryEndAfter(); }
+        });
+        mo.observe(host, {subtree:true, childList:true, attributes:true, characterData:true, attributeFilter:['class']});
+
+        function onClick(e){
+          if (e.target && e.target.closest && e.target.closest('.cct-card')) {
+            setTimeout(function(){
+              if (!ended && hasFlippedLoss()) tryEndAfter();
+            }, 0);
+          }
+        }
+        host.addEventListener('click', onClick, true);
+
+        return function detach(){ try{mo.disconnect();}catch(e){} try{host.removeEventListener('click', onClick, true);}catch(e){} };
+      }
+
+      // ---- COLD: points overlay mask (removed at END ROUND) ----
+      function attachColdPointsMaskOverlay(root){
+        var pointsEl = null, nodes = root.querySelectorAll('*');
+        for (var i=0; i<nodes.length; i++){
+          var t = (nodes[i].textContent || '').replace(/\u2212/g,'-');
+          if (/^\s*Points\s*:\s*-?\d+\s*$/.test(t)) { pointsEl = nodes[i]; break; }
+        }
+        if (!pointsEl) return function(){};
+
+        var container = pointsEl;
+        if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+        var mask = document.createElement('div');
+        mask.style.position = 'absolute';
+        mask.style.inset = '0';
+        mask.style.display = 'flex';
+        mask.style.alignItems = 'center';
+        mask.style.justifyContent = 'center';
+        mask.style.fontWeight = '600';
+        mask.style.background = 'rgba(255,255,255,0.95)';
+        mask.style.borderRadius = '8px';
+        mask.style.pointerEvents = 'none';
+        mask.textContent = 'Points: —';
+        container.appendChild(mask);
+
+        return function detach(){ try { mask.remove(); } catch(e){} };
+      }
+
+      // -------- Build jsPsych trials (Practice + Main) -------------
+      var timeline = [];
+
+      // Instructions
+      timeline.push(instructions);
+
+      // Practice (fixed order; exclude from analysis)
+      PRACTICE.forEach(function(c, idx){
+        timeline.push({
+          type: window.jsPsychPluginColumbiaCardTask,
+          hot: c.hot,
+          immediate_feedback: !!c.hot,
+          end_on_loss: false,
+          button_label_stop: 'END ROUND',
+          // IMPORTANT: plugin param names (exact for v1.0.0)
+          num_cards: 32,                 /* CHANGED */
+          num_loss_cards: c.L,           /* CHANGED */
+          gain_value: c.g,               /* CHANGED */
+          loss_value: -c.loss,           /* CHANGED (must be negative) */
+          post_trial_gap: c.hot ? 700 : 900,
+          on_load: function(){
+            var btns = document.getElementById('Buttons');
+            var next = document.getElementById('NextButton');
+            if (btns) { btns.style.visibility = 'hidden'; btns.style.pointerEvents = 'none'; }
+            if (next) { next.style.visibility = 'hidden'; next.style.pointerEvents = 'none'; next.disabled = true; }
+
+            window.__CCT_ROUND__ = (window.__CCT_ROUND__ || 0) + 1;
+            var root = document.getElementById('jspsych-target');
+            unlockInteraction(root); enableCards(root);
+
+            var oldHdr = root.querySelector('.cct-header'); if (oldHdr) oldHdr.remove();
+            var hdr = document.createElement('div'); hdr.className = 'cct-header';
+            hdr.innerHTML = headerHTML(window.__CCT_ROUND__, (PRACTICE.length + N_TRIALS_MAIN),
+                                       c.hot, 'practice', c.g, c.loss, 32 - c.L, c.L);
+            root.insertBefore(hdr, root.firstChild);
+
+            renameStopToEndRound();
+
+            if (c.hot) {
+              root.classList.remove('cct-cold');
+              window.__CCT_DETACH__ = attachHotEndByFinishTrial(c.loss);
+            } else {
+              root.classList.add('cct-cold');
+              var removePointsMask = attachColdPointsMaskOverlay(root);
+              window.__CCT_DETACH__ = function(){ removePointsMask(); };
+              var endBtn = root.querySelector('button, input[type="button"], .jspsych-btn, [role="button"]');
+              var endHandler = function(){
+                root.classList.remove('cct-cold');
+                removePointsMask();
+                setTimeout(function(){ disableCards(root); }, 0);
+              };
+              if (endBtn) {
+                endBtn.addEventListener('mousedown', endHandler, true);
+                endBtn.addEventListener('click', endHandler, true);
+              }
+            }
+          },
+          on_finish: function(data){
+            try { if (window.__CCT_DETACH__) window.__CCT_DETACH__(); } catch(e){}
+            jsPsych.data.addProperties({
+              task:'cct', phase:'practice', hot:c.hot, gain:c.g, loss:c.loss,
+              nGain:32 - c.L, nLoss:c.L, round: window.__CCT_ROUND__ || null
+            });
+          }
+        });
+      });
+
+      // Main 24 (shuffled within 4 blocks of 6; HOT/COLD pattern applied)
+      ORDER24.forEach(function(c, idx){
+        timeline.push({
+          type: window.jsPsychPluginColumbiaCardTask,
+          hot: c.hot,
+          immediate_feedback: !!c.hot,
+          end_on_loss: false,
+          button_label_stop: 'END ROUND',
+          // IMPORTANT: plugin param names (exact for v1.0.0)
+          num_cards: 32,                 /* CHANGED */
+          num_loss_cards: c.L,           /* CHANGED */
+          gain_value: c.g,               /* CHANGED */
+          loss_value: -c.loss,           /* CHANGED (must be negative) */
+          post_trial_gap: c.hot ? 900 : 1200,
+          on_load: function(){
+            var btns = document.getElementById('Buttons');
+            var next = document.getElementById('NextButton');
+            if (btns) { btns.style.visibility = 'hidden'; btns.style.pointerEvents = 'none'; }
+            if (next) { next.style.visibility = 'hidden'; next.style.pointerEvents = 'none'; next.disabled = true; }
+
+            window.__CCT_ROUND__ = (window.__CCT_ROUND__ || 0) + 1;
+            var root = document.getElementById('jspsych-target');
+            unlockInteraction(root); enableCards(root);
+
+            var oldHdr = root.querySelector('.cct-header'); if (oldHdr) oldHdr.remove();
+            var hdr = document.createElement('div'); hdr.className = 'cct-header';
+            hdr.innerHTML = headerHTML(window.__CCT_ROUND__, (PRACTICE.length + N_TRIALS_MAIN),
+                                       c.hot, 'main', c.g, c.loss, 32 - c.L, c.L);
+            root.insertBefore(hdr, root.firstChild);
+
+            renameStopToEndRound();
+
+            if (c.hot) {
+              root.classList.remove('cct-cold');
+              window.__CCT_DETACH__ = attachHotEndByFinishTrial(c.loss);
+            } else {
+              root.classList.add('cct-cold');
+              var removePointsMask = attachColdPointsMaskOverlay(root);
+              window.__CCT_DETACH__ = function(){ removePointsMask(); };
+              var endBtn = root.querySelector('button, input[type="button"], .jspsych-btn, [role="button"]');
+              var endHandler = function(){
+                root.classList.remove('cct-cold');
+                removePointsMask();
+                setTimeout(function(){ disableCards(root); }, 0);
+              };
+              if (endBtn) {
+                endBtn.addEventListener('mousedown', endHandler, true);
+                endBtn.addEventListener('click', endHandler, true);
+              }
+            }
+          },
+          on_finish: function(data){
+            try { if (window.__CCT_DETACH__) window.__CCT_DETACH__(); } catch(e){}
+            jsPsych.data.addProperties({
+              task:'cct', phase:'main', hot:c.hot, gain:c.g, loss:c.loss,
+              nGain:32 - c.L, nLoss:c.L, round: window.__CCT_ROUND__ || null
+            });
+          }
+        });
+      });
+
+      jsPsych.run(timeline);
+    })
+    .catch(function(err){
+      console.error('[CCT] init error:', err);
+      target.innerHTML = '<p style="color:#b00"><b>Sorry, the task could not be loaded.</b><br><small>'+ (err && err.message ? err.message : err) +'</small></p>';
+      showNextEnable();
+    });
+  })();
+});
+
+Qualtrics.SurveyEngine.addOnUnload(function(){ /* cleanup if needed */ });
