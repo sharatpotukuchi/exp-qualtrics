@@ -1,0 +1,126 @@
+<style>
+  .term-wrap{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; max-width:780px;margin:0 auto; }
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .bal{font-weight:700}
+  .chip{padding:2px 8px;border-radius:12px;background:#f3f4f6;font-size:12px}
+  .panel{border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:8px 0;background:#fff}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .col{flex:1}
+  .ticker{font-weight:700;font-size:18px}
+  #px{border:1px solid #e5e7eb;border-radius:6px}
+  .kv{font-size:14px}
+  .kv b{font-size:16px}
+  .ordergrid{display:grid;grid-template-columns: repeat(6,1fr); gap:10px}
+  .ordergrid label{font-size:12px;color:#374151}
+  .ordergrid input, .ordergrid select{width:100%; padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}
+  .btn{appearance:none;border:0;border-radius:10px;padding:10px 14px;font-weight:700; cursor:pointer}
+  .btn-primary{background:#111827;color:#fff}
+  .btn-ghost{background:#f3f4f6;color:#111827}
+  .hint{display:none;margin-top:8px;padding:10px;border:1px dashed #d1d5db;border-radius:8px;background:#fafafa}
+  .flash-up{animation: upflash 600ms ease}
+  .flash-down{animation: downflash 600ms ease}
+  @keyframes upflash{0%{background:#ecfdf5}100%{background:transparent}}
+  @keyframes downflash{0%{background:#fef2f2}100%{background:transparent}}
+  .sent-wrap{display:flex;align-items:center;gap:8px}
+  .sentbar{height:10px;background:#e5e7eb;border-radius:999px;flex:1;overflow:hidden}
+  .sentfill{height:100%; background:#111827}
+  .news{display:flex;gap:10px;align-items:flex-start}
+  .news img{width:60px;height:60px;border-radius:8px;object-fit:cover;border:1px solid #e5e7eb}
+  .danger{color:#991b1b}
+  .success{color:#065f46}
+  #timer{font-variant:tabular-nums;font-weight:700}
+  .pnl{font-variant:tabular-nums}
+  .note{font-size:12px;color:#6b7280}
+  .footerline{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+</style>
+
+<div class="term-wrap">
+  <div class="topbar">
+    <div class="ticker">
+      <span id="sym">ALFA</span>
+      <span class="chip" id="sessionTag">Regular</span>
+    </div>
+    <div class="bal">Balance: $<span id="balanceTxt">100,000</span></div>
+  </div>
+
+  
+  <div class="panel">
+    <div class="row">
+      <div class="col">
+        <canvas id="px" width="460" height="100"></canvas>
+      </div>
+      <div class="col kv">
+        <div>Last: <b id="last">--</b></div>
+        <div>Bid / Ask: <b id="bid">--</b> / <b id="ask">--</b></div>
+        <div>Position: <b id="posQty">0</b> @ <b id="posPx">—</b></div>
+        <div class="pnl">Unrealized P/L: <b id="unrl" class="">—</b></div>
+        <div>Time left: <span id="timer">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  
+  <div class="row">
+    <div class="panel col">
+      <div class="sent-wrap">
+        <div style="min-width:100px">“Others” buying:</div>
+        <div class="sentbar"><div id="sentfill" class="sentfill" style="width:0%"></div></div>
+        <div style="min-width:40px;text-align:right"><span id="sentPct">0</span>%</div>
+      </div>
+      <div class="note">Herding cue (can be randomized).</div>
+    </div>
+    <div class="panel col">
+      <div class="news">
+        <img id="newsImg" alt="">
+        <div>
+          <div id="newsHead" style="font-weight:700;">Headline</div>
+          <div id="newsBody" class="note">Short blurb goes here…</div>
+        </div>
+      </div>
+      <div class="note">Availability / framing cue (positive/negative tone).</div>
+    </div>
+  </div>
+
+  
+  <div class="panel">
+    <div class="ordergrid">
+      <div>
+        <label>Order Type</label>
+        <select id="ordType">
+          <option>Market</option>
+          <option>Limit</option>
+          <option>Stop</option>
+        </select>
+      </div>
+      <div>
+        <label>Limit/Stop Price</label>
+        <input id="ordPx" type="number" step="0.01" placeholder="e.g., 62.10">
+      </div>
+      <div>
+        <label>Quantity</label>
+        <input id="qty" type="number" step="1" min="1" value="100">
+      </div>
+      <div>
+        <label><input type="checkbox" id="sl"> Stop Loss (−10%)</label><br>
+        <label><input type="checkbox" id="tp"> Take Profit (+20%)</label>
+      </div>
+      <div>
+        <label>Default Target (anchor)</label>
+        <input id="target" type="number" step="0.1" placeholder="e.g., 75.0">
+      </div>
+      <div>
+        <label>Fair Value (hidden)</label>
+        <input id="fv" type="number" step="0.01" placeholder="e.g., 61.90">
+      </div>
+    </div>
+    <div class="footerline">
+      <div>
+        <button id="place" class="btn btn-primary">Place Order</button>
+        <button id="confirm" class="btn btn-ghost" style="display:none">Confirm & Continue</button>
+      </div>
+      <div id="hint" class="hint"></div>
+    </div>
+  </div>
+
+  <div class="note">Tip: We’ll log bid/ask distance, order type, quantity, confirm latency, and whether you overrode defaults.</div>
+</div>
