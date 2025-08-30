@@ -1,0 +1,257 @@
+Qualtrics.SurveyEngine.addOnload(function(){ try{ this.hideNextButton(); }catch(e){} });
+
+Qualtrics.SurveyEngine.addOnReady(function () {
+  var q = this;
+
+  // ===== 1) Load Embedded Data (with sensible fallbacks for piloting) =====
+  function ED(name, fallback){ 
+    var v = "${e://Field/" + name + "}";
+    return (v && v !== name && v !== "") ? v : fallback; 
+  }
+
+  var symbol   = ED("symbol","ALFA");
+  var prices   = [];
+  try { prices = JSON.parse(ED("prices_json","[100,100.2,100.6,100.3,100.9,100.7,101.2,100.8,101.4,101.1,101.9,101.3]")); } catch(e){ prices=[100,100.2,100.6,100.3,100.9,100.7,101.2,100.8,101.4,101.1,101.9,101.3]; }
+  var bid0     = parseFloat(ED("bid","61.80"));
+  var ask0     = parseFloat(ED("ask","62.20"));
+  var last0    = parseFloat(ED("last","62.10"));
+  var balance  = parseFloat(ED("balance","100000"));
+  var posQty   = parseInt(ED("pos_qty","0"),10);
+  var posPx    = ED("pos_px","—");
+  var hot      = ED("hot_condition","0")==="1";          // 1=timer on
+  var treat    = ED("treatment_group","control")==="nudge";
+  var herding  = parseInt(ED("sentiment_pct","74"),10);  // 0..100
+  var session  = ED("session_tag","Regular");
+  var newsHead = ED("news_head","Target raised to $75 by TopBroker");
+  var newsBody = ED("news_body","Analyst reiterates Buy; notes momentum in core segment.");
+  var newsImg  = ED("news_img","https://images.unsplash.com/photo-1551808525-51a94da548ce?q=80&w=400&auto=format&fit=crop");
+  var anchor   = ED("anchor_target","75.0");
+  var fairVal  = ED("fair_value","61.90");                // hidden normative reference
+  var pUp      = parseFloat(ED("p_up","0.50"));           // optional outcome model
+  var upRet    = parseFloat(ED("up_ret","0.10"));
+  var downRet  = parseFloat(ED("down_ret","-0.10"));
+  var timerSec = parseInt(ED("timer_sec","12"),10);
+
+  // Pre-fill visible fields
+  jQuery("#sym").text(symbol);
+  jQuery("#sessionTag").text(session);
+  jQuery("#balanceTxt").text(num(balance));
+  jQuery("#bid").text(num(bid0));
+  jQuery("#ask").text(num(ask0));
+  jQuery("#last").text(num(last0));
+  jQuery("#posQty").text(posQty);
+  jQuery("#posPx").text(posPx);
+  jQuery("#sentfill").css("width", herding+"%");
+  jQuery("#sentPct").text(herding);
+  jQuery("#newsHead").text(newsHead);
+  jQuery("#newsBody").text(newsBody);
+  jQuery("#newsImg").attr("src", newsImg);
+  jQuery("#target").val(anchor);
+  jQuery("#fv").val(fairVal);
+
+  // Defaults to induce status quo
+  jQuery("#ordType").val(ED("default_order","Market"));
+  jQuery("#qty").val(ED("default_qty","100"));
+
+  // ===== 2) Sparkline animation =====
+  var c = document.getElementById("px"), ctx = c.getContext("2d");
+  var w = c.width, h = c.height, pad = 8, i = 1;
+  function draw(n){
+    ctx.clearRect(0,0,w,h);
+    var slice = prices.slice(0, Math.max(2,n));
+    var minP = Math.min.apply(null, slice), maxP = Math.max.apply(null, slice);
+    var range = (maxP - minP) || 1e-6;
+
+    ctx.lineWidth = 1; ctx.strokeStyle = "#e5e7eb";
+    ctx.beginPath(); ctx.moveTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
+
+    ctx.lineWidth = 2; ctx.strokeStyle = "#111827"; ctx.beginPath();
+    for (var k=0; k<slice.length; k++){
+      var x = pad + (k*(w-2*pad)/(slice.length-1));
+      var y = pad + (h-2*pad)*(1 - (slice[k]-minP)/range);
+      (k===0) ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    var last = slice[slice.length-1];
+    jQuery("#last").text(num(last));
+  }
+  draw(i);
+  var chartTimer = setInterval(function(){ i++; if(i>prices.length){clearInterval(chartTimer);} else { draw(i); } }, 450);
+
+  // ===== 3) Timer (hot rounds) =====
+  var t0 = Date.now();
+  if(hot){
+    var t = timerSec;
+    jQuery("#timer").text(t);
+    var intv = setInterval(function(){
+      t--; jQuery("#timer").text(t);
+      if(t<=0){ clearInterval(intv); autoSubmit("timeout"); }
+    },1000);
+  } else {
+    jQuery("#timer").text("—");
+  }
+
+  // ===== 4) Order placement + two-step confirm with nudge =====
+  var placed = false, hinted = false, exec = null;
+
+  jQuery("#place").on("click", function(e){
+    e.preventDefault();
+    var ordType = jQuery("#ordType").val();
+    var ordPx   = parseFloat(jQuery("#ordPx").val());
+    var qty     = parseInt(jQuery("#qty").val(),10)||0;
+    var useSL   = jQuery("#sl").is(":checked") ? 1 : 0;
+    var useTP   = jQuery("#tp").is(":checked") ? 1 : 0;
+
+    // Basic validation
+    if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
+    if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
+
+    // Compute simplistic execution:
+    var fillPx = last(); // by default
+    var filled = 0;
+
+    if(ordType==="Market"){
+      fillPx = ask0; filled = qty; // buy @ best ask for simplicity
+    } else if (ordType==="Limit"){
+      if(!isNaN(ordPx) && ordPx>=ask0){ fillPx = ordPx; filled = qty; } // cross spread
+      else { fillPx = ordPx||ask0; filled = Math.floor(qty*Math.max(0, (ordPx||0)/ask0)); } // partial
+    } else if (ordType==="Stop"){
+      // simple buy-stop: trigger if last >= stop; else pending (we treat as no fill)
+      if(!isNaN(ordPx) && last()>=ordPx){ fillPx = last(); filled = qty; } else { filled = 0; }
+    }
+
+    var cost = filled * fillPx;
+    var delta = -cost; // buying reduces cash; mark-to-market unrealized will be shown separately
+
+    // Update balance immediately for “live” feel (cash effect only)
+    var newBal = balance + delta;
+    flashBalance(newBal, delta);
+    balance = newBal;
+
+    // Store execution details locally
+    exec = { ordType, ordPx:isNaN(ordPx)?null:ordPx, qty, filled, fillPx, useSL, useTP, cash_delta: delta, ts: Date.now() };
+
+    // Nudge step before confirm?
+    if(treat && !hinted){
+      hinted = true;
+      jQuery("#hint").html(nudgeText(exec, fairVal, anchor, herding, hot)).show();
+      jQuery("#confirm").show();
+      jQuery("#place").text("Adjust Order").removeClass("btn-primary").addClass("btn-ghost");
+    } else {
+      // If already hinted (or control), show confirm
+      jQuery("#confirm").show();
+    }
+
+    placed = true;
+  });
+
+  jQuery("#confirm").on("click", function(e){
+    e.preventDefault();
+    if(!placed){ return; }
+    submitAndAdvance("ok");
+  });
+
+  // ===== 5) Helper functions =====
+  function last(){ 
+    var idx = Math.min(i-1, prices.length-1);
+    return prices[idx] || last0; 
+  }
+  function num(x){ 
+    var n = parseFloat(x);
+    if(isNaN(n)) return x;
+    return n.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+  }
+  function flashBalance(newBal, delta){
+    jQuery("#balanceTxt").text(num(newBal));
+    var cls = delta>=0 ? "flash-up" : "flash-down";
+    jQuery(".bal").addClass(cls);
+    setTimeout(function(){ jQuery(".bal").removeClass(cls); }, 600);
+  }
+  function nudgeText(exec, fv, anchor, herd, hot){
+    // A neutral, “decision-aid” style tip (tweak per scenario)
+    var dist = (exec.ordType==="Market") ? (ask0 - parseFloat(fv)) : ((exec.ordPx||ask0) - parseFloat(fv));
+    var msg = [];
+    msg.push(`<b>Quick check</b>: Your ${exec.ordType} entry is ${dist>=0?'+':''}${dist.toFixed(2)} vs fair value ${parseFloat(fv).toFixed(2)}.`);
+    msg.push(`Spread is ${ (ask0-bid0).toFixed(2) }. Consider execution cost vs expected move.`);
+    if(anchor) msg.push(`Don't over-weight the target ${anchor} (possible <i>anchor</i>).`);
+    if(herd>=70) msg.push(`High “others buying” signal (${herd}%) can trigger <i>herding</i> bias.`);
+    if(hot) msg.push(`Timer pressure can increase <i>hot</i> decisions—take a breath.`);
+    return msg.join("<br>");
+  }
+
+  function computeUnrealizedPnl(qty, px){
+    if(!qty || !px || px==="—") return "—";
+    var u = qty * (last() - parseFloat(px));
+    var el = jQuery("#unrl");
+    el.text((u>=0?"+":"") + num(u));
+    el.toggleClass("success", u>0).toggleClass("danger", u<0);
+    return u;
+  }
+
+  // Show unrealized P/L if they already have a position
+  computeUnrealizedPnl(posQty, posPx);
+
+  // ===== 6) Auto submit on timeout (if hot) =====
+  function autoSubmit(reason){
+    if(!placed){
+      // If they didn’t place, simulate a “no trade” (or minimal default)
+      exec = { ordType: jQuery("#ordType").val(), ordPx: null, qty: 0, filled:0, fillPx: last(), useSL:0, useTP:0, cash_delta:0, ts: Date.now(), autosubmit: reason };
+    }
+    submitAndAdvance(reason);
+  }
+
+  // ===== 7) Save data & advance =====
+  function submitAndAdvance(reason){
+    var rt = Date.now() - t0;
+    var fv = parseFloat(jQuery("#fv").val());
+    var target = parseFloat(jQuery("#target").val());
+    var biasMetrics = deriveBias(exec, fv, target, herding);
+
+    // Persist scenario outcomes to Embedded Data
+    Qualtrics.SurveyEngine.setEmbeddedData("rt_ms", rt);
+    Qualtrics.SurveyEngine.setEmbeddedData("hint_shown", hinted ? "1" : "0");
+    Qualtrics.SurveyEngine.setEmbeddedData("exec_ordType", exec.ordType);
+    Qualtrics.SurveyEngine.setEmbeddedData("exec_ordPx", exec.ordPx);
+    Qualtrics.SurveyEngine.setEmbeddedData("exec_qty", exec.qty);
+    Qualtrics.SurveyEngine.setEmbeddedData("exec_filled", exec.filled);
+    Qualtrics.SurveyEngine.setEmbeddedData("exec_fillPx", exec.fillPx);
+    Qualtrics.SurveyEngine.setEmbeddedData("cash_delta", exec.cash_delta);
+    Qualtrics.SurveyEngine.setEmbeddedData("new_balance", balance);
+    Qualtrics.SurveyEngine.setEmbeddedData("autosubmit_reason", reason || "");
+    Qualtrics.SurveyEngine.setEmbeddedData("bias_is_biased", biasMetrics.is_biased ? "1" : "0");
+    Qualtrics.SurveyEngine.setEmbeddedData("bias_anchor_dist", biasMetrics.anchor_dist.toFixed(4));
+    Qualtrics.SurveyEngine.setEmbeddedData("bias_fv_dist", biasMetrics.fv_dist.toFixed(4));
+    Qualtrics.SurveyEngine.setEmbeddedData("bias_herd_suscept", biasMetrics.herd_suscept.toFixed(4));
+    Qualtrics.SurveyEngine.setEmbeddedData("ev_hold", evHold(last(), pUp, upRet, downRet).toFixed(6));
+
+    // IMPORTANT: carry forward running balance to next scenario
+    Qualtrics.SurveyEngine.setEmbeddedData("balance", balance);
+
+    // Advance
+    jQuery("#NextButton").click();
+  }
+
+  function deriveBias(exec, fv, target, herd){
+    // Distance to fair value (positive = paid above FV)
+    var px = (exec.ordType==="Market") ? ask0 : (exec.ordPx==null ? ask0 : exec.ordPx);
+    var fvDist = px - fv;
+
+    // Anchor distance: closeness to shown target (smaller abs ⇒ stronger anchor pull)
+    var anchorDist = (isNaN(target) || target==null) ? 0 : Math.abs(px - target);
+
+    // Herd susceptibility: buy despite extreme sentiment cue (proxy)
+    var herdSus = (herd>=70 && exec.qty>0) ? 1 : 0;
+
+    // Simple biased flag (tune per scenario): paying above FV by > half-spread OR strong herd cue usage
+    var isBiased = (fvDist > (ask0-bid0)/2) || (herdSus===1);
+
+    return { is_biased: !!isBiased, fv_dist: fvDist||0, anchor_dist: anchorDist||0, herd_suscept: herdSus||0 };
+  }
+
+  function evHold(price, pUp, up, down){
+    // Risk-neutral one-step EV (illustrative)
+    return pUp*(price*(1+up)) + (1-pUp)*(price*(1+down)) - price;
+  }
+});
+
+Qualtrics.SurveyEngine.addOnUnload(function(){ /* no-op */ });
