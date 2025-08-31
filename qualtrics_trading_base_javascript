@@ -4,18 +4,51 @@ Qualtrics.SurveyEngine.addOnload(function(){ try{ this.hideNextButton(); }catch(
 Qualtrics.SurveyEngine.addOnReady(function () {
   var q = this;
 
-  // ===== Unified getter: LM -> ED -> fallback =====
-  function GV(name, fallback){
-    var lm = "${lm://Field/"+name+"}";
-    if (lm !== "" && lm !== ("lm://Field/"+name)) return lm;
+  // ===== LM column index map (only for scenario fields; NOT used for treatment) =====
+  var LM_INDEX = {
+    scenario_id:1, scenario_name:2, symbol:3, prices_json:4,
+    bid:5, ask:6, last:7, pos_qty:8, pos_px:9, hot_condition:10,
+    // treatment_group is intentionally excluded from LM use
+    sentiment_pct:12, session_tag:13, news_head:14, news_body:15
+  };
 
+  // ===== Unified getter for scenario fields: LM-by-name -> LM-by-index -> ED -> fallback =====
+  function GV(name, fallback){
+    // Never read treatment_group from LM; only ED (handled below)
+    if (name === "treatment_group") {
+      var edOnly = "${e://Field/treatment_group}";
+      return (edOnly !== "" && edOnly !== "treatment_group") ? edOnly : fallback;
+    }
+
+    // LM by name
+    var lmNamed = "${lm://Field/"+name+"}";
+    if (lmNamed !== "" && lmNamed !== ("lm://Field/"+name)) return lmNamed;
+
+    // LM by index (handles hidden characters in header names)
+    var idx = LM_INDEX[name];
+    if (idx){
+      var lmIdx = "${lm://Field/"+idx+"}";
+      if (lmIdx !== "" && lmIdx !== ("lm://Field/"+idx)) return lmIdx;
+    }
+
+    // ED fallback (useful if you mirror some scenario fields into ED upstream)
     var ed = "${e://Field/"+name+"}";
     if (ed !== "" && ed !== name) return ed;
 
+    // Final fallback
     return fallback;
   }
 
-  // ===== 1) Load values =====
+  // ===== treatment comes ONLY from Embedded Data (Randomizer) =====
+  function cleanAlpha(v){ return (v==null?"":String(v)).normalize("NFKD").toLowerCase().replace(/[^a-z]/g,""); }
+  var ED_TREAT = "${e://Field/treatment_group}";
+  // Optional force for testing: ?nudge=1 in URL OR ED debug_force_nudge=1 in Survey Flow
+  var FORCE_NUDGE = /[?&]nudge=1(&|$)/.test(location.search) || ("${e://Field/debug_force_nudge}" === "1");
+  var TREAT = (cleanAlpha(ED_TREAT) === "nudge") || FORCE_NUDGE;
+  // One-line debug
+  console.log("TREATMENT →", { ed: ED_TREAT, force: FORCE_NUDGE, treat: TREAT });
+
+  // ===== 1) Load scenario values =====
   var symbol   = GV("symbol","ALFA");
   var prices   = [];
   try { prices = JSON.parse(GV("prices_json","[62.10,62.18,62.22,62.25,62.28,62.24,62.19,62.12,62.05,61.98,61.95,61.99,62.03,62.07,62.10,62.12]")); }
@@ -24,13 +57,14 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var bid0     = parseFloat(GV("bid","61.80"));
   var ask0     = parseFloat(GV("ask","62.20"));
   var last0    = parseFloat(GV("last","62.10"));
-  var balance  = parseFloat(GV("balance","100000"));      // set in Survey Flow (branch init)
+  var balance  = parseFloat(GV("balance","100000"));       // carried via ED in Survey Flow
   var posQty   = parseInt(GV("pos_qty","0"),10);
   var posPx    = GV("pos_px","—");
 
   var hot      = GV("hot_condition","0")==="1";
-  var treat    = GV("treatment_group","control")==="nudge";
-  var herding  = parseInt(GV("sentiment_pct","76"),10);   // S1 default 76
+  var treat    = TREAT; // <- use ED-only determination
+
+  var herding  = parseInt(GV("sentiment_pct","76"),10);    // S1 default 76
   var session  = GV("session_tag","Regular");
   var newsHead = GV("news_head","TopBroker raises ALFA target to $75; cites outsized AI demand");
   var newsBody = GV("news_body","Analyst reiterates Buy, notes momentum in core segment. Implied daily move ±10%.");
@@ -61,7 +95,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
   // Defaults to induce status quo
   jQuery("#ordType").val(GV("default_order","Market"));
-  jQuery("#qty").val(GV("default_qty","200")); // S1 default = 200
+  jQuery("#qty").val(GV("default_qty","200"));
 
   // ===== 2) Sparkline animation =====
   var c = document.getElementById("px"), ctx = c.getContext("2d");
@@ -108,45 +142,51 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
   jQuery("#place").on("click", function(e){
     e.preventDefault();
-    var ordType = jQuery("#ordType").val();
-    var ordPx   = parseFloat(jQuery("#ordPx").val());
-    var qty     = parseInt(jQuery("#qty").val(),10)||0;
-    var useSL   = jQuery("#sl").is(":checked") ? 1 : 0;
-    var useTP   = jQuery("#tp").is(":checked") ? 1 : 0;
+    try {
+      var ordType = jQuery("#ordType").val();
+      var ordPx   = parseFloat(jQuery("#ordPx").val());
+      var qty     = parseInt(jQuery("#qty").val(),10)||0;
+      var useSL   = jQuery("#sl").is(":checked") ? 1 : 0;
+      var useTP   = jQuery("#tp").is(":checked") ? 1 : 0;
 
-    if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
-    if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
+      if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
+      if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
 
-    var fillPx = last(); // default
-    var filled = 0;
+      var fillPx = last(); // default
+      var filled = 0;
 
-    if(ordType==="Market"){
-      fillPx = ask0; filled = qty;
-    } else if (ordType==="Limit"){
-      if(!isNaN(ordPx) && ordPx>=ask0){ fillPx = ordPx; filled = qty; }
-      else { fillPx = ordPx||ask0; filled = Math.floor(qty*Math.max(0, (ordPx||0)/ask0)); }
-    } else if (ordType==="Stop"){
-      if(!isNaN(ordPx) && last()>=ordPx){ fillPx = last(); filled = qty; } else { filled = 0; }
-    }
+      if(ordType==="Market"){
+        fillPx = ask0; filled = qty;
+      } else if (ordType==="Limit"){
+        if(!isNaN(ordPx) && ordPx>=ask0){ fillPx = ordPx; filled = qty; }
+        else { fillPx = ordPx||ask0; filled = Math.floor(qty*Math.max(0, (ordPx||0)/ask0)); }
+      } else if (ordType==="Stop"){
+        if(!isNaN(ordPx) && last()>=ordPx){ fillPx = last(); filled = qty; } else { filled = 0; }
+      }
 
-    var cost = filled * fillPx;
-    var delta = -cost;                 // buy reduces cash
-    var newBal = balance + delta;
-    flashBalance(newBal, delta);
-    balance = newBal;
+      var cost = filled * fillPx;
+      var delta = -cost;                 
+      var newBal = balance + delta;
+      flashBalance(newBal, delta);
+      balance = newBal;
 
-    exec = { ordType, ordPx:isNaN(ordPx)?null:ordPx, qty, filled, fillPx, useSL, useTP, cash_delta: delta, ts: Date.now() };
+      exec = { ordType, ordPx:isNaN(ordPx)?null:ordPx, qty, filled, fillPx, useSL, useTP, cash_delta: delta, ts: Date.now() };
 
-    if(treat && !hinted){
-      hinted = true;
-      jQuery("#hint").html(nudgeText(exec, fairVal, anchor, herding, hot)).show();
+      if(treat && !hinted){
+        hinted = true;
+        jQuery("#hint").html(nudgeText(exec, fairVal, anchor, herding, hot)).show();
+        jQuery("#confirm").show();
+        jQuery("#place").text("Adjust Order").removeClass("btn-primary").addClass("btn-ghost");
+      } else {
+        jQuery("#confirm").show();
+      }
+
+      placed = true;
+    } catch(err){
+      console.error("Error in Place handler:", err);
       jQuery("#confirm").show();
-      jQuery("#place").text("Adjust Order").removeClass("btn-primary").addClass("btn-ghost");
-    } else {
-      jQuery("#confirm").show();
+      placed = true;
     }
-
-    placed = true;
   });
 
   jQuery("#confirm").on("click", function(e){
@@ -193,48 +233,61 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
   computeUnrealizedPnl(posQty, posPx);
 
-  // ===== 6) Auto submit on timeout (if hot) =====
-  function autoSubmit(reason){
-    if(!placed){
-      exec = { ordType: jQuery("#ordType").val(), ordPx: null, qty: 0, filled:0, fillPx: last(), useSL:0, useTP:0, cash_delta:0, ts: Date.now(), autosubmit: reason };
-    }
-    submitAndAdvance(reason);
+  // ===== 6) Robust advance helper =====
+  function advance(){
+    try { q.clickNextButton(); } catch(e) {}
+
+    setTimeout(function(){
+      jQuery("#NextButton, input[name='NextButton'], button[id*='Next'], button[name*='Next'], [class*='Next']")
+        .prop("disabled", false).trigger("click");
+    }, 60);
+
+    setTimeout(function(){
+      try { Qualtrics.SurveyEngine.navClick && Qualtrics.SurveyEngine.navClick("NextButton"); } catch(e){}
+    }, 120);
+
+    setTimeout(function(){
+      try { jQuery("form").first().trigger("submit"); } catch(e){}
+    }, 180);
   }
 
   // ===== 7) Save data & advance =====
   function submitAndAdvance(reason){
-    var rt = Date.now() - t0;
-    var fv = parseFloat(jQuery("#fv").val());
-    var target = parseFloat(jQuery("#target").val());
-    var biasMetrics = deriveBias(exec, fv, target, herding);
+    try {
+      var rt = Date.now() - t0;
+      var fv = parseFloat(jQuery("#fv").val());
+      var target = parseFloat(jQuery("#target").val());
+      var biasMetrics = deriveBias(exec, fv, target, herding);
 
-    Qualtrics.SurveyEngine.setEmbeddedData("rt_ms", rt);
-    Qualtrics.SurveyEngine.setEmbeddedData("hint_shown", hinted ? "1" : "0");
-    Qualtrics.SurveyEngine.setEmbeddedData("exec_ordType", exec.ordType);
-    Qualtrics.SurveyEngine.setEmbeddedData("exec_ordPx", exec.ordPx);
-    Qualtrics.SurveyEngine.setEmbeddedData("exec_qty", exec.qty);
-    Qualtrics.SurveyEngine.setEmbeddedData("exec_filled", exec.filled);
-    Qualtrics.SurveyEngine.setEmbeddedData("exec_fillPx", exec.fillPx);
-    Qualtrics.SurveyEngine.setEmbeddedData("cash_delta", exec.cash_delta);
-    Qualtrics.SurveyEngine.setEmbeddedData("new_balance", balance);
-    Qualtrics.SurveyEngine.setEmbeddedData("autosubmit_reason", reason || "");
-    Qualtrics.SurveyEngine.setEmbeddedData("bias_is_biased", biasMetrics.is_biased ? "1" : "0");
-    Qualtrics.SurveyEngine.setEmbeddedData("bias_anchor_dist", biasMetrics.anchor_dist.toFixed(4));
-    Qualtrics.SurveyEngine.setEmbeddedData("bias_fv_dist", biasMetrics.fv_dist.toFixed(4));
-    Qualtrics.SurveyEngine.setEmbeddedData("bias_herd_suscept", biasMetrics.herd_suscept.toFixed(4));
-    Qualtrics.SurveyEngine.setEmbeddedData("ev_hold", evHold(last(), pUp, upRet, downRet).toFixed(6));
+      Qualtrics.SurveyEngine.setEmbeddedData("rt_ms", rt);
+      Qualtrics.SurveyEngine.setEmbeddedData("hint_shown", hinted ? "1" : "0");
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_ordType", exec && exec.ordType);
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_ordPx", exec && exec.ordPx);
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_qty", exec && exec.qty);
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_filled", exec && exec.filled);
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_fillPx", exec && exec.fillPx);
+      Qualtrics.SurveyEngine.setEmbeddedData("cash_delta", exec && exec.cash_delta);
+      Qualtrics.SurveyEngine.setEmbeddedData("new_balance", balance);
+      Qualtrics.SurveyEngine.setEmbeddedData("autosubmit_reason", reason || "");
+      Qualtrics.SurveyEngine.setEmbeddedData("bias_is_biased", biasMetrics.is_biased ? "1" : "0");
+      Qualtrics.SurveyEngine.setEmbeddedData("bias_anchor_dist", biasMetrics.anchor_dist.toFixed(4));
+      Qualtrics.SurveyEngine.setEmbeddedData("bias_fv_dist", biasMetrics.fv_dist.toFixed(4));
+      Qualtrics.SurveyEngine.setEmbeddedData("bias_herd_suscept", biasMetrics.herd_suscept.toFixed(4));
+      Qualtrics.SurveyEngine.setEmbeddedData("ev_hold", evHold(last(), pUp, upRet, downRet).toFixed(6));
+      Qualtrics.SurveyEngine.setEmbeddedData("balance", balance);
+    } catch(err){
+      console.error("Error during submitAndAdvance:", err);
+    }
 
-    // carry forward running balance
-    Qualtrics.SurveyEngine.setEmbeddedData("balance", balance);
-
-    jQuery("#NextButton").click();
+    advance();
+    setTimeout(advance, 400); // last-resort nudge forward
   }
 
   function deriveBias(exec, fv, target, herd){
-    var px = (exec.ordType==="Market") ? ask0 : (exec.ordPx==null ? ask0 : exec.ordPx);
+    var px = (exec && exec.ordType==="Market") ? ask0 : ((exec && exec.ordPx==null) ? ask0 : (exec ? exec.ordPx : ask0));
     var fvDist = px - fv;
     var anchorDist = (isNaN(target) || target==null) ? 0 : Math.abs(px - target);
-    var herdSus = (herd>=70 && exec.qty>0) ? 1 : 0;
+    var herdSus = (herd>=70 && exec && exec.qty>0) ? 1 : 0;
     var isBiased = (fvDist > (ask0-bid0)/2) || (herdSus===1);
     return { is_biased: !!isBiased, fv_dist: fvDist||0, anchor_dist: anchorDist||0, herd_suscept: herdSus||0 };
   }
@@ -242,7 +295,4 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   function evHold(price, pUp, up, down){
     return pUp*(price*(1+up)) + (1-pUp)*(price*(1+down)) - price;
   }
-
-  // --- Optional one-time debug (remove after testing) ---
-  // console.table({symbol, bid0, ask0, last0, herding, def_qty: jQuery("#qty").val(), treat});
 });
