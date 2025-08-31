@@ -1,70 +1,76 @@
-// Hide Next (we advance programmatically)
-Qualtrics.SurveyEngine.addOnload(function(){ try{ this.hideNextButton(); }catch(e){} });
+// Do NOT fully hide Next; keep it present so Qualtrics accepts navigation.
+Qualtrics.SurveyEngine.addOnload(function () {
+  try {
+    var nb = document.getElementById('NextButton');
+    if (nb) {
+      nb.style.position = 'fixed';
+      nb.style.left = '-9999px';
+      nb.style.top = '0';
+      nb.style.opacity = '0';
+      nb.style.display = 'block';
+      nb.style.pointerEvents = 'auto';
+      nb.disabled = false;
+      nb.removeAttribute('data-runtime-disabled');
+      nb.removeAttribute('aria-disabled');
+      nb.removeAttribute('data-runtime-hide');
+    }
+  } catch (e) {}
+});
 
 Qualtrics.SurveyEngine.addOnReady(function () {
   var q = this;
 
-  // ===== LM column index map (only for scenario fields; NOT used for treatment) =====
+  // ===== LM index (scenario fields only) =====
   var LM_INDEX = {
     scenario_id:1, scenario_name:2, symbol:3, prices_json:4,
     bid:5, ask:6, last:7, pos_qty:8, pos_px:9, hot_condition:10,
-    // treatment_group is intentionally excluded from LM use
     sentiment_pct:12, session_tag:13, news_head:14, news_body:15
   };
 
-  // ===== Unified getter for scenario fields: LM-by-name -> LM-by-index -> ED -> fallback =====
+  // ===== Unified getter for scenario fields =====
   function GV(name, fallback){
-    // Never read treatment_group from LM; only ED (handled below)
     if (name === "treatment_group") {
       var edOnly = "${e://Field/treatment_group}";
       return (edOnly !== "" && edOnly !== "treatment_group") ? edOnly : fallback;
     }
-
-    // LM by name
     var lmNamed = "${lm://Field/"+name+"}";
     if (lmNamed !== "" && lmNamed !== ("lm://Field/"+name)) return lmNamed;
 
-    // LM by index (handles hidden characters in header names)
     var idx = LM_INDEX[name];
     if (idx){
       var lmIdx = "${lm://Field/"+idx+"}";
       if (lmIdx !== "" && lmIdx !== ("lm://Field/"+idx)) return lmIdx;
     }
-
-    // ED fallback (useful if you mirror some scenario fields into ED upstream)
     var ed = "${e://Field/"+name+"}";
     if (ed !== "" && ed !== name) return ed;
 
-    // Final fallback
     return fallback;
   }
 
-  // ===== treatment comes ONLY from Embedded Data (Randomizer) =====
+  // ===== treatment from ED only (with optional ?nudge=1) =====
   function cleanAlpha(v){ return (v==null?"":String(v)).normalize("NFKD").toLowerCase().replace(/[^a-z]/g,""); }
   var ED_TREAT = "${e://Field/treatment_group}";
-  // Optional force for testing: ?nudge=1 in URL OR ED debug_force_nudge=1 in Survey Flow
   var FORCE_NUDGE = /[?&]nudge=1(&|$)/.test(location.search) || ("${e://Field/debug_force_nudge}" === "1");
   var TREAT = (cleanAlpha(ED_TREAT) === "nudge") || FORCE_NUDGE;
-  // One-line debug
   console.log("TREATMENT →", { ed: ED_TREAT, force: FORCE_NUDGE, treat: TREAT });
 
-  // ===== 1) Load scenario values =====
+  // ===== Load scenario =====
   var symbol   = GV("symbol","ALFA");
-  var prices   = [];
+  var prices = [];
   try { prices = JSON.parse(GV("prices_json","[62.10,62.18,62.22,62.25,62.28,62.24,62.19,62.12,62.05,61.98,61.95,61.99,62.03,62.07,62.10,62.12]")); }
-  catch(e){ prices=[62.1,62.18,62.22,62.25,62.28,62.24,62.19,62.12,62.05,61.98,61.95,61.99,62.03,62.07,62.10,62.12]; }
+  catch(e){ prices=[62.10,62.18,62.22,62.25,62.28,62.24,62.19,62.12,62.05,61.98,61.95,61.99,62.03,62.07,62.10,62.12]; }
 
   var bid0     = parseFloat(GV("bid","61.80"));
   var ask0     = parseFloat(GV("ask","62.20"));
   var last0    = parseFloat(GV("last","62.10"));
-  var balance  = parseFloat(GV("balance","100000"));       // carried via ED in Survey Flow
+  var balance  = parseFloat(GV("balance","100000"));
   var posQty   = parseInt(GV("pos_qty","0"),10);
   var posPx    = GV("pos_px","—");
 
   var hot      = GV("hot_condition","0")==="1";
-  var treat    = TREAT; // <- use ED-only determination
+  var treat    = TREAT;
 
-  var herding  = parseInt(GV("sentiment_pct","76"),10);    // S1 default 76
+  var herding  = parseInt(GV("sentiment_pct","76"),10);
   var session  = GV("session_tag","Regular");
   var newsHead = GV("news_head","TopBroker raises ALFA target to $75; cites outsized AI demand");
   var newsBody = GV("news_body","Analyst reiterates Buy, notes momentum in core segment. Implied daily move ±10%.");
@@ -76,7 +82,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var downRet  = parseFloat(GV("down_ret","-0.06"));
   var timerSec = parseInt(GV("timer_sec","12"),10);
 
-  // ===== Pre-fill UI =====
+  // ===== Prefill UI =====
   jQuery("#sym").text(symbol);
   jQuery("#sessionTag").text(session);
   jQuery("#balanceTxt").text(num(balance));
@@ -92,24 +98,19 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   jQuery("#newsImg").attr("src", newsImg);
   jQuery("#target").val(anchor);
   jQuery("#fv").val(fairVal);
-
-  // Defaults to induce status quo
   jQuery("#ordType").val(GV("default_order","Market"));
   jQuery("#qty").val(GV("default_qty","200"));
 
-  // ===== 2) Sparkline animation =====
+  // ===== Sparkline =====
   var c = document.getElementById("px"), ctx = c.getContext("2d");
   var w = c.width, h = c.height, pad = 8, i = 1;
-
   function draw(n){
     ctx.clearRect(0,0,w,h);
     var slice = prices.slice(0, Math.max(2,n));
     var minP = Math.min.apply(null, slice), maxP = Math.max.apply(null, slice);
     var range = (maxP - minP) || 1e-6;
-
     ctx.lineWidth = 1; ctx.strokeStyle = "#e5e7eb";
     ctx.beginPath(); ctx.moveTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
-
     ctx.lineWidth = 2; ctx.strokeStyle = "#111827"; ctx.beginPath();
     for (var k=0; k<slice.length; k++){
       var x = pad + (k*(w-2*pad)/(slice.length-1));
@@ -117,14 +118,13 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       (k===0) ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
     }
     ctx.stroke();
-
     var last = slice[slice.length-1];
     jQuery("#last").text(num(last));
   }
   draw(i);
   var chartTimer = setInterval(function(){ i++; if(i>prices.length){clearInterval(chartTimer);} else { draw(i); } }, 450);
 
-  // ===== 3) Timer (hot rounds) =====
+  // ===== Timer (hot) =====
   var t0 = Date.now();
   if(hot){
     var t = timerSec;
@@ -133,18 +133,17 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       t--; jQuery("#timer").text(t);
       if(t<=0){ clearInterval(intv); autoSubmit("timeout"); }
     },1000);
-  } else {
-    jQuery("#timer").text("—");
-  }
+  } else { jQuery("#timer").text("—"); }
 
-  // ===== 4) Order placement + two-step confirm with nudge =====
+  // ===== Order + confirm =====
   var placed = false, hinted = false, exec = null;
 
   jQuery("#place").on("click", function(e){
     e.preventDefault();
     try {
       var ordType = jQuery("#ordType").val();
-      var ordPx   = parseFloat(jQuery("#ordPx").val());
+      var ordPxRaw = jQuery("#ordPx").val();
+      var ordPx   = (ordPxRaw===""||ordPxRaw==null) ? NaN : parseFloat(ordPxRaw);
       var qty     = parseInt(jQuery("#qty").val(),10)||0;
       var useSL   = jQuery("#sl").is(":checked") ? 1 : 0;
       var useTP   = jQuery("#tp").is(":checked") ? 1 : 0;
@@ -152,20 +151,15 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
       if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
 
-      var fillPx = last(); // default
-      var filled = 0;
-
-      if(ordType==="Market"){
-        fillPx = ask0; filled = qty;
-      } else if (ordType==="Limit"){
-        if(!isNaN(ordPx) && ordPx>=ask0){ fillPx = ordPx; filled = qty; }
-        else { fillPx = ordPx||ask0; filled = Math.floor(qty*Math.max(0, (ordPx||0)/ask0)); }
-      } else if (ordType==="Stop"){
-        if(!isNaN(ordPx) && last()>=ordPx){ fillPx = last(); filled = qty; } else { filled = 0; }
-      }
+      var fillPx = last(); var filled = 0;
+      if(ordType==="Market"){ fillPx = isFinite(ask0)?ask0:last(); filled = qty; }
+      else if (ordType==="Limit"){
+        if(!isNaN(ordPx) && isFinite(ask0) && ordPx>=ask0){ fillPx = ordPx; filled = qty; }
+        else { fillPx = !isNaN(ordPx)?ordPx:ask0; filled = Math.floor(qty*Math.max(0, (!isNaN(ordPx)&&isFinite(ask0)? (ordPx/ask0) : 0))); }
+      } else if (ordType==="Stop"){ if(!isNaN(ordPx) && last()>=ordPx){ fillPx = last(); filled = qty; } }
 
       var cost = filled * fillPx;
-      var delta = -cost;                 
+      var delta = -cost;
       var newBal = balance + delta;
       flashBalance(newBal, delta);
       balance = newBal;
@@ -174,18 +168,15 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
       if(treat && !hinted){
         hinted = true;
-        jQuery("#hint").html(nudgeText(exec, fairVal, anchor, herding, hot)).show();
+        jQuery("#hint").html(nudgeText(exec, jQuery("#fv").val(), anchor, herding, hot)).show();
         jQuery("#confirm").show();
         jQuery("#place").text("Adjust Order").removeClass("btn-primary").addClass("btn-ghost");
-      } else {
-        jQuery("#confirm").show();
-      }
+      } else { jQuery("#confirm").show(); }
 
       placed = true;
     } catch(err){
       console.error("Error in Place handler:", err);
-      jQuery("#confirm").show();
-      placed = true;
+      jQuery("#confirm").show(); placed = true;
     }
   });
 
@@ -195,63 +186,113 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     submitAndAdvance("ok");
   });
 
-  // ===== 5) Helpers =====
-  function last(){ 
-    var idx = Math.min(i-1, prices.length-1);
-    return prices[idx] || last0; 
-  }
-  function num(x){ 
-    var n = parseFloat(x);
-    if(isNaN(n)) return x;
-    return n.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
-  }
+  // ===== Helpers =====
+  function last(){ var idx = Math.min(i-1, prices.length-1); return prices[idx] || last0; }
+  function num(x){ var n = parseFloat(x); if(isNaN(n)) return x; return n.toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2}); }
+  function isNum(n){ return typeof n === "number" && isFinite(n); }
+  function fmt(n, d){ return isNum(n) ? n.toFixed(d==null?2:d) : "—"; }
+  function signedFmt(n, d){ if(!isNum(n)) return "—"; var s = n>=0?"+":""; return s + n.toFixed(d==null?2:d); }
+
   function flashBalance(newBal, delta){
     jQuery("#balanceTxt").text(num(newBal));
     var cls = delta>=0 ? "flash-up" : "flash-down";
     jQuery(".bal").addClass(cls);
     setTimeout(function(){ jQuery(".bal").removeClass(cls); }, 600);
   }
+
   function nudgeText(exec, fv, anchor, herd, hot){
-    var fvNum = parseFloat(fv);
-    var dist = (exec.ordType==="Market") ? (ask0 - fvNum) : ((exec.ordPx||ask0) - fvNum);
+    var fvNum = parseFloat(fv); if(!isNum(fvNum)) fvNum = last();
+    var entryPx = (exec.ordType==="Market") ? ask0 : (isNum(exec.ordPx) ? exec.ordPx : ask0);
+    if(!isNum(entryPx)) entryPx = last();
+    var dist = entryPx - fvNum;
+    var spr  = (isNum(ask0) && isNum(bid0)) ? (ask0 - bid0) : null;
     var msg = [];
-    msg.push(`<b>Quick check</b>: Your ${exec.ordType} entry is ${dist>=0?'+':''}${dist.toFixed(2)} vs fair value ${fvNum.toFixed(2)}.`);
-    msg.push(`Spread is ${(ask0-bid0).toFixed(2)}. Consider execution cost vs expected move.`);
-    if(anchor) msg.push(`Don't over-weight the target ${anchor} (possible <i>anchor</i>).`);
+    msg.push(`<b>Quick check</b>: Your ${exec.ordType} entry is ${signedFmt(dist,2)} vs fair value ${fmt(fvNum,2)}.`);
+    msg.push(`Spread is ${fmt(spr,2)}. Consider execution cost vs expected move.`);
+    if(anchor && anchor!=="" && !isNaN(parseFloat(anchor))) msg.push(`Don't over-weight the target ${fmt(parseFloat(anchor),2)} (possible <i>anchor</i>).`);
     if(herd>=70) msg.push(`High “others buying” signal (${herd}%) can trigger <i>herding</i> bias.`);
     if(hot) msg.push(`Timer pressure can increase <i>hot</i> decisions—take a breath.`);
     return msg.join("<br>");
   }
+
   function computeUnrealizedPnl(qty, px){
-    if(!qty || !px || px==="—") return "—";
-    var u = qty * (last() - parseFloat(px));
+    if(!qty || !px || px==="—" || isNaN(parseFloat(px))) return "—";
+    var basePx = parseFloat(px);
+    var u = qty * (last() - basePx);
     var el = jQuery("#unrl");
-    el.text((u>=0?"+":"") + num(u));
-    el.toggleClass("success", u>0).toggleClass("danger", u<0);
+    el.text((u>=0?"+":"") + num(u)).toggleClass("success", u>0).toggleClass("danger", u<0);
     return u;
   }
-
   computeUnrealizedPnl(posQty, posPx);
 
-  // ===== 6) Robust advance helper =====
-  function advance(){
-    try { q.clickNextButton(); } catch(e) {}
+  // ========= CRITICAL FIX: click Next in BOTH iframe and parent =========
+  function getDocs(){
+    var docs = [document];
+    try {
+      if (window.parent && window.parent !== window && window.parent.document) {
+        docs.push(window.parent.document);
+      }
+    } catch(e){}
+    return docs;
+  }
+  function getNextButtons(){
+    var btns = [];
+    getDocs().forEach(function(d){
+      try {
+        var nb = d.getElementById('NextButton');
+        if (nb) btns.push(nb);
+      } catch(e){}
+    });
+    return btns;
+  }
+  function enableAndReveal(nb){
+    try {
+      nb.style.display = 'block';
+      nb.style.opacity = '0';
+      nb.style.pointerEvents = 'auto';
+      nb.disabled = false;
+      nb.removeAttribute('data-runtime-disabled');
+      nb.removeAttribute('aria-disabled');
+      nb.removeAttribute('data-runtime-hide');
+    } catch(e){}
+  }
+  function realClick(el){
+    try {
+      ['mouseover','mousedown','mouseup','click'].forEach(function(type){
+        el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:el.ownerDocument.defaultView}));
+      });
+    } catch(e){}
+  }
+  function tryAdvanceOnce(){
+    // Qualtrics API (iframe)
+    try { q.enableNextButton && q.enableNextButton(); } catch(e){}
+    try { q.clickNextButton && q.clickNextButton(); } catch(e){}
+    try { Qualtrics.SurveyEngine && Qualtrics.SurveyEngine.navClick && Qualtrics.SurveyEngine.navClick("NextButton"); } catch(e){}
 
-    setTimeout(function(){
-      jQuery("#NextButton, input[name='NextButton'], button[id*='Next'], button[name*='Next'], [class*='Next']")
-        .prop("disabled", false).trigger("click");
-    }, 60);
+    // Qualtrics API (parent)
+    try {
+      if (window.parent && window.parent.Qualtrics && window.parent.Qualtrics.SurveyEngine && window.parent.Qualtrics.SurveyEngine.navClick){
+        window.parent.Qualtrics.SurveyEngine.navClick("NextButton");
+      }
+    } catch(e){}
 
-    setTimeout(function(){
-      try { Qualtrics.SurveyEngine.navClick && Qualtrics.SurveyEngine.navClick("NextButton"); } catch(e){}
-    }, 120);
+    // DOM click(s)
+    var btns = getNextButtons();
+    btns.forEach(function(nb){ enableAndReveal(nb); realClick(nb); });
 
-    setTimeout(function(){
-      try { jQuery("form").first().trigger("submit"); } catch(e){}
-    }, 180);
+    // form submit fallback (iframe + parent)
+    getDocs().forEach(function(d){
+      try { var f = d.querySelector("form[action*='SurveyEngine']"); if (f) f.submit(); } catch(e){}
+    });
   }
 
-  // ===== 7) Save data & advance =====
+  function advance(){
+    // aggressive, short retry train to defeat theme/preview timing
+    var schedule = [0, 80, 160, 280, 420, 600, 900, 1300, 1800];
+    schedule.forEach(function(ms){ setTimeout(tryAdvanceOnce, ms); });
+  }
+
+  // ===== Save + advance =====
   function submitAndAdvance(reason){
     try {
       var rt = Date.now() - t0;
@@ -278,17 +319,18 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     } catch(err){
       console.error("Error during submitAndAdvance:", err);
     }
-
     advance();
-    setTimeout(advance, 400); // last-resort nudge forward
   }
+  function autoSubmit(reason){ submitAndAdvance(reason); }
 
   function deriveBias(exec, fv, target, herd){
     var px = (exec && exec.ordType==="Market") ? ask0 : ((exec && exec.ordPx==null) ? ask0 : (exec ? exec.ordPx : ask0));
-    var fvDist = px - fv;
+    if(!isNum(px)) px = last();
+    var fvSrc = isNum(fv) ? fv : parseFloat(fairVal);
+    var fvDist = isNum(fvSrc) ? (px - fvSrc) : 0;
     var anchorDist = (isNaN(target) || target==null) ? 0 : Math.abs(px - target);
     var herdSus = (herd>=70 && exec && exec.qty>0) ? 1 : 0;
-    var isBiased = (fvDist > (ask0-bid0)/2) || (herdSus===1);
+    var isBiased = (fvDist > (isNum(ask0)&&isNum(bid0)? ((ask0-bid0)/2) : 0.05)) || (herdSus===1);
     return { is_biased: !!isBiased, fv_dist: fvDist||0, anchor_dist: anchorDist||0, herd_suscept: herdSus||0 };
   }
 
