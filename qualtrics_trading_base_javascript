@@ -151,6 +151,13 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var DEFAULT_ORDER = GV("default_order","Market");
   var DEFAULT_QTY   = parseInt(GV("default_qty","200"),10)||200;
 
+  // >>> pre/post instrumentation (adds analytics without changing UX)
+  var preExec = null;                // first proposal (captured on initial Place)
+  var preFvUsed = null;              // fv used to compute pre dist
+  var preEntryPxUsed = null;         // entry px at first Place
+  var editCount = 0;                 // how many times Adjust was used
+  var rt_to_place_ms = null;         // time from page load to first Place
+
   function lastPx(){ var idx=Math.min(i-1, prices.length-1); return prices[idx] || last0 || ask0 || bid0; }
   function flashBalance(newBal, delta){
     jQuery("#balanceTxt").text(numPretty(newBal));
@@ -167,6 +174,13 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     jQuery("#hint").hide().empty();
     jQuery("#confirm").hide();
     jQuery("#place").text("Place Order").removeClass("btn-ghost").addClass("btn-primary");
+  }
+  // >>> helper to compute the effective entry price for any exec
+  function entryPriceFor(e){
+    if (!e) return lastPx();
+    var px = (e.ordType==="Market") ? (isNum(ask0)?ask0:lastPx())
+                                    : (isNum(e.ordPx)?e.ordPx:(isNum(ask0)?ask0:lastPx()));
+    return isNum(px)?px:lastPx();
   }
 
   function renderNudge(exec, fvInput, anchorVal, herdPct, hotFlg){
@@ -203,6 +217,8 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     e.preventDefault();
 
     if(pending){
+      // user chose Adjust; keep preExec for analysis but allow re-entry
+      editCount++;
       pending=false; hinted=false; exec=null;
       resetOrderUI();
       return;
@@ -229,6 +245,14 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
       exec = { ordType:ordType, ordPx:isNaN(ordPx)?null:ordPx, qty:qty, filled:filled, fillPx:fillPx,
                useSL:useSL, useTP:useTP, cash_delta:0, ts:Date.now() };
+
+      // >>> capture PRE snapshot only on the very first Place
+      if (preExec == null){
+        preExec = { ordType:exec.ordType, ordPx:exec.ordPx, qty:exec.qty, filled:exec.filled, fillPx:exec.fillPx, ts:exec.ts };
+        preFvUsed = coerceNum(jQuery("#fv").val(), fairVal, lastPx()); if(!isNum(preFvUsed)) preFvUsed = lastPx();
+        preEntryPxUsed = entryPriceFor(exec);
+        rt_to_place_ms = Date.now() - t0;
+      }
 
       if(TREAT){
         hinted=true;
@@ -359,6 +383,20 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       var target = toNum(jQuery("#target").val());
       var metrics = deriveBias(exec, fv, target, herding);
 
+      // >>> post metrics + change analysis
+      var postEntry = entryPriceFor(exec);
+      var fvNow = isNum(fv) ? fv : toNum(fairVal);
+      var preDist = (isNum(preEntryPxUsed) && isNum(preFvUsed)) ? (preEntryPxUsed - preFvUsed) : null;
+      var postDist = (isNum(postEntry) && isNum(fvNow)) ? (postEntry - fvNow) : null;
+
+      var changed = 0, changedFields = [];
+      if (preExec){
+        if ((preExec.ordType||"") !== (exec && exec.ordType||"")){ changed=1; changedFields.push("ordType"); }
+        if (String(preExec.ordPx||"") !== String((exec && exec.ordPx)||"")){ changed=1; changedFields.push("ordPx"); }
+        if (String(preExec.qty||"") !== String((exec && exec.qty)||"")){ changed=1; changedFields.push("qty"); }
+      }
+
+      // existing ED
       Qualtrics.SurveyEngine.setEmbeddedData("rt_ms", rt);
       Qualtrics.SurveyEngine.setEmbeddedData("hint_shown", hinted ? "1" : "0");
       Qualtrics.SurveyEngine.setEmbeddedData("exec_ordType", exec && exec.ordType);
@@ -375,6 +413,25 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       Qualtrics.SurveyEngine.setEmbeddedData("bias_herd_suscept", metrics.herd_suscept.toFixed(4));
       Qualtrics.SurveyEngine.setEmbeddedData("ev_hold", evHold(lastPx(), pUp, upRet, downRet).toFixed(6));
       Qualtrics.SurveyEngine.setEmbeddedData("balance", balance);
+
+      // >>> new ED for pre/post & deltas (analytics)
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_ordType", preExec && preExec.ordType);
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_ordPx", preExec && preExec.ordPx);
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_qty", preExec && preExec.qty);
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_filled", preExec && preExec.filled);
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_fillPx", preExec && preExec.fillPx);
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_fv", isNum(preFvUsed)? preFvUsed : "");
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_entryPx", isNum(preEntryPxUsed)? preEntryPxUsed : "");
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_dist_to_fv", isNum(preDist)? preDist.toFixed(4) : "");
+
+      Qualtrics.SurveyEngine.setEmbeddedData("post_entryPx", isNum(postEntry)? postEntry : "");
+      Qualtrics.SurveyEngine.setEmbeddedData("post_fv", isNum(fvNow)? fvNow : "");
+      Qualtrics.SurveyEngine.setEmbeddedData("post_dist_to_fv", isNum(postDist)? postDist.toFixed(4) : "");
+
+      Qualtrics.SurveyEngine.setEmbeddedData("changed_after_nudge", String(changed));
+      Qualtrics.SurveyEngine.setEmbeddedData("changed_fields", changedFields.join(","));
+      Qualtrics.SurveyEngine.setEmbeddedData("adjust_count", String(editCount));
+      Qualtrics.SurveyEngine.setEmbeddedData("rt_to_place_ms", rt_to_place_ms==null ? "" : String(rt_to_place_ms));
     }catch(err){ try{ console.error("submitAndAdvance error:", err); }catch(e){} }
     advance();
   }
