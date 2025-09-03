@@ -27,26 +27,18 @@
   .scenario p{margin:0;font-size:14px;color:#374151}
 
   /* Market */
-  .chartbox{
-    position:relative;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;
-  }
-  .chart-head{
-    display:flex;align-items:center;justify-content:space-between;margin-bottom:8px
-  }
-  .chart-ticker{
-    background:#fff;border:1px solid var(--line);
-    border-radius:999px;padding:6px 10px;font-weight:700;font-size:12px
-  }
+  .chartbox{position:relative;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;}
+  .chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .chart-ticker{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-weight:700;font-size:12px}
   .last-pill{background:#111827;color:#fff;border-radius:999px;padding:6px 10px;font-size:12px;font-variant:tabular-nums}
   .plotwrap{
     position:relative;border:1px solid var(--line);border-radius:12px;padding:8px;
-    /* subtle grid in PLOT AREA only */
+    /* grid only in the plot area */
     background-image:
       repeating-linear-gradient(to right,#f3f4f6 0,#f3f4f6 1px,transparent 1px,transparent 80px),
       repeating-linear-gradient(to bottom,#f3f4f6 0,#f3f4f6 1px,transparent 1px,transparent 40px);
   }
   #px{display:block;width:100%;height:180px;border-radius:8px}
-  /* overlay sits inside plot area, leaving bottom room for x-axis labels */
   .plotwrap #pxOverlay{position:absolute;left:8px;right:8px;top:8px;bottom:28px;pointer-events:none}
   .chart-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
 
@@ -111,7 +103,9 @@
   
   <div class="panel scenario" aria-label="Scenario intro">
     <h3>Scenario 1</h3>
-    <p>It’s <b>9:28 a.m.</b> (pre-open). You’re starting the day with <b>$100,000</b> and no open positions. Your focus name is <b>ALFA</b>, a large-cap “AI hardware &amp; edge compute” stock. Overnight, a top broker released a bullish note.</p>
+    <p>It’s <b><span id="scenarioNowTxt">9:28 a.m.</span></b> (pre-open). You’re starting the day with <b>$100,000</b> and no open positions. Your focus name is <b>ALFA</b>, a large-cap “AI hardware &amp; edge compute” stock. Overnight, a top broker released a bullish note.</p>
+    
+    <span id="scenarioNowRaw" style="display:none">9:28</span>
   </div>
 
   
@@ -265,20 +259,31 @@
     new MutationObserver(()=>{ d.textContent=s.textContent||''; })
       .observe(s,{characterData:true,subtree:true,childList:true});
   })();
+
+  // Make scenario "now" available to overlay
+  window.__scenarioNow = (function(){
+    var raw = document.getElementById('scenarioNowRaw');
+    var t = raw ? (raw.textContent||'').trim() : '';
+    // Try to extract "H:MM" from visible text too, as a fallback
+    if(!t){
+      var vis = document.getElementById('scenarioNowTxt');
+      var m = vis && vis.textContent.match(/(\d{1,2}:\d{2})/);
+      t = m ? m[1] : '9:28';
+    }
+    return t;
+  })();
 })();
 
-/* === Candle + Y-axis + X-axis labels overlay (driven by #last) === */
+/* === Candle + axes overlay (driven by #last) === */
 (function(){
-  var base=document.getElementById('px');
   var overlay=document.getElementById('pxOverlay');
-  if(!base||!overlay) return;
+  if(!overlay) return;
 
   function sizeOverlay(){
-    // match the inner plot area in .plotwrap (padding: 8px; bottom label space ~28px)
     var plotwrap=overlay.parentElement; // .plotwrap
     var r=plotwrap.getBoundingClientRect();
     overlay.width=Math.max(10,Math.floor(r.width-16));   // left+right padding (8px each)
-    overlay.height=Math.max(10,Math.floor(r.height-36)); // top 8 + bottom 28
+    overlay.height=Math.max(10,Math.floor(r.height-36)); // top 8 + bottom area for x labels
   }
   sizeOverlay(); window.addEventListener('resize', sizeOverlay);
 
@@ -316,11 +321,15 @@
     var W=overlay.width,H=overlay.height;if(!W||!H)return;
     ctx.clearRect(0,0,W,H);
 
-    var axisW=44,padR=6,x0=axisW,x1=W-padR,plotW=x1-x0;
+    var axisW=52,padR=6,x0=axisW,x1=W-padR,plotW=x1-x0;
     var y0=6,y1=H-6-12,plotH=y1-y0; // reserve ~12px for x-axis labels
+
+    // paint the Y-axis gutter to hide the base line that runs under it
+    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,x0-1,H);
 
     var data=series.slice(); if(cur)data.push(cur); if(!data.length)return;
 
+    // y-range
     var lo=Infinity,hi=-Infinity;
     for(const k of data){ if(k.l<lo)lo=k.l; if(k.h>hi)hi=k.h; }
     if(!(isFinite(lo)&&isFinite(hi)))return;
@@ -328,10 +337,12 @@
     var pad=(hi-lo)*0.08; lo-=pad; hi+=pad;
     const yFor=v=> y0+(hi-v)*(plotH/(hi-lo));
 
+    // x-scale (right-aligned)
     var n=data.length,cw=Math.max(3,Math.floor(plotW/Math.max(30,n*1.2)));
     var gap=Math.max(1,Math.floor(cw*0.4));
     var totalW=n*(cw+gap)-gap,xStart=x1-totalW;
 
+    // candles
     ctx.lineWidth=1;
     for(let i=0;i<n;i++){
       const k=data[i],x=xStart+i*(cw+gap);
@@ -339,14 +350,12 @@
       const up=k.c>=k.o;
       ctx.strokeStyle=up?'#059669':'#dc2626';
       ctx.fillStyle=up?'rgba(5,150,105,0.18)':'rgba(220,38,38,0.18)';
-      // wick
       ctx.beginPath();ctx.moveTo(x+Math.floor(cw/2),yh);ctx.lineTo(x+Math.floor(cw/2),yl);ctx.stroke();
-      // body
       const top=Math.min(yo,yc),h=Math.max(2,Math.abs(yc-yo));
       ctx.fillRect(x,top,cw,h);ctx.strokeRect(x,top,cw,h);
     }
 
-    // Y-axis grid + labels
+    // Y-axis grid + labels (start at x0 so they don't cross the gutter)
     ctx.fillStyle='#6b7280';ctx.strokeStyle='#e5e7eb';
     ctx.font='11px Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
     ctx.textAlign='right';ctx.textBaseline='middle';
@@ -357,8 +366,18 @@
       ctx.fillText(v.toFixed(2), axisW-6, y);
     }
 
-    // X-axis labels (scenario sense of time)
-    const labels=['9:28','9:29','9:30','9:31','9:32'];
+    // X-axis labels: only past -> now. Rightmost label = scenario "now"
+    var nowStr = (window.__scenarioNow || '9:28').trim();      // "H:MM"
+    var m = nowStr.match(/^(\d{1,2}):(\d{2})$/);
+    var Hh=9, Mm=28; if(m){ Hh=parseInt(m[1],10); Mm=parseInt(m[2],10); }
+    function fmt(h,m){ return h+':'+String(m).padStart(2,'0'); }
+    // Build 5 labels from T-4 to T (1-min steps)
+    var labels=[];
+    for(let i=4;i>=0;i--){
+      let tot = Hh*60+Mm - i;
+      let h=Math.floor(tot/60), mm=tot%60; if(mm<0){mm+=60;h--;}
+      labels.push(fmt(h,mm));
+    }
     ctx.textAlign='center'; ctx.textBaseline='top';
     for(let i=0;i<labels.length;i++){
       const frac=i/(labels.length-1);
