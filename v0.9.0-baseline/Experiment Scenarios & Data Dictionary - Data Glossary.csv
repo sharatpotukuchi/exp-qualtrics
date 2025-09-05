@@ -1,0 +1,33 @@
+Category,Key,Description,Type,When set,Calculation / Source,Example,Notes / Edge cases
+Session / Control,is_preview,1' in Preview mode to help Survey Flow avoid external redirects; '0' otherwise.,string,OnReady (page load),/Q_CHL=preview detected in URL,1,Used to keep you on-site during testing (no Prolific redirect).
+Session / Control,autosubmit_reason,"Why the page submitted without user confirm (e.g., 'timeout') or 'ok' when Confirm is clicked.",string,Submit,ok' on Confirm; 'timeout' when hot timer ends.,ok,Extend with other reasons if you add flows.
+Timing,rt_ms,Reaction time from load to submit (Confirm/timeout).,number,Submit,Date.now() - t0,,Milliseconds.
+Timing,rt_to_place_ms,Time from load to first Place click; blank if never placed.,number/blank,First Place,Date.now() - t0 at first Place,,Useful to separate 'deliberation' from 'confirmation' time.
+Treatment & Hint,hint_shown,Whether the nudge (hint box) was shown.,1'/'0',First Place (if TREAT),Set to '1' when TREAT active and Place clicked at least once.,1,Control rounds will remain '0'.
+Committed Execution,exec_ordType,Final order type at Confirm.,string,Confirm,UI selection at Confirm,Market,One of Market/Limit/Stop.
+Committed Execution,exec_ordPx,Price field value at Confirm (kept even if Market).,number/blank,Confirm,Parsed from #ordPx; not blanked for Market.,65,Captures 'intended Limit but forgot to switch'.
+Committed Execution,exec_qty,Quantity at Confirm.,number,Confirm,Parsed integer from #qty,200,
+Committed Execution,exec_filled,Shares filled at Confirm.,number,Confirm,From hypothetical fill logic on last Place,200,Limit may be partial.
+Committed Execution,exec_fillPx,Fill price at Confirm.,number,Confirm,Market→ask0; Stop→lastPx; Limit→ordPx or proxy,62.2,
+Committed Execution,cash_delta,Cash impact of the trade.,number,Confirm,-(exec_filled * exec_fillPx),-12440,Negative on buy.
+Committed Execution,new_balance,Balance after commit.,number,Confirm,balance + cash_delta,87560,
+Committed Execution,balance,Same as new_balance (convenience duplicate).,number,Confirm,Copied from new_balance,87560,Useful in downstream merges.
+Bias Metrics,bias_is_biased,Flag if bias threshold triggered.,1'/'0',Submit,"(fv_dist > max(spread/2,0.05)) OR herd_suscept==1",1,"Deterministic, see below."
+Bias Metrics,bias_anchor_dist,|entryPx - target|.,string number (4 d.p.),Submit,"Absolute difference, or 0 if target not numeric",12.8,
+Bias Metrics,bias_fv_dist,entryPx - fairValueUsed.,string number (4 d.p.),Submit,entryPx determined by order type; fv from typed #fv → fair_value.,0.3,Positive means entry above fair value.
+Bias Metrics,bias_herd_suscept,1 if herd >=70 and qty>0; else 0.,string number (4 d.p.),Submit,Threshold on sentiment_pct and qty,1,
+Expected Value,ev_hold,Expected incremental P&L from holding one step.,string number (6 d.p.),Submit,pUp*P*(1+up) + (1-pUp)*P*(1+down) - P (P = lastPx at submit),0.795136,Scenario-driven sanity check.
+Pre Snapshot (first Place),pre_ordType,Order type when Place clicked first time.,string,First Place,From UI at first Place,Market,
+Pre Snapshot (first Place),pre_ordPx,Typed price at first Place (kept even if Market).,number/blank,First Place,Parsed from #ordPx,65,Intended-Limit diagnostic.
+Pre Snapshot (first Place),pre_qty,Quantity at first Place.,number,First Place,Parsed from #qty,200,
+Pre Snapshot (first Place),pre_filled,Hypothetical filled at first Place.,number,First Place,From hypothetical fill logic,200,
+Pre Snapshot (first Place),pre_fillPx,Hypothetical fill price at first Place.,number,First Place,"Depends on ordType (Market→ask0, etc.)",62.2,
+Pre Snapshot (first Place),pre_fv,Fair value used for pre distance.,number,First Place,typed #fv → fair_value → lastPx,61.9,
+Pre Snapshot (first Place),pre_entryPx,Entry price used for pre distance.,number,First Place,entryPriceFor(preExec),62.2,
+Pre Snapshot (first Place),pre_dist_to_fv,pre_entryPx - pre_fv.,string number (4 d.p.),First Place,Difference as string with 4 d.p.,0.3,
+Post Snapshot (submit),post_entryPx,Entry price used for post distance.,number/blank,Submit,entryPriceFor(exec),62.2,
+Post Snapshot (submit),post_fv,Fair value used for post distance.,number/blank,Submit,typed #fv → fair_value,61.9,
+Post Snapshot (submit),post_dist_to_fv,post_entryPx - post_fv.,string number (4 d.p.),Submit,Difference as string with 4 d.p.,0.3,
+Change Analysis,changed_after_nudge,1 if ordType/ordPx/qty changed vs pre; else 0.,1'/'0',Submit,Field-wise comparison pre vs post,0,
+Change Analysis,changed_fields,"CSV of changed fields among ordType,ordPx,qty.",string,Submit,Joined list of differences,,Empty if unchanged.
+Change Analysis,adjust_count,How many times Adjust was clicked.,string number,Each Adjust,Incremented on each 'Adjust' press,0,Indicator of nudge engagement.
