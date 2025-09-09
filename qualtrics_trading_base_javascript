@@ -1,8 +1,5 @@
 // Keep Next present (off-screen) so Qualtrics accepts navigation.
 Qualtrics.SurveyEngine.addOnload(function () {
-  // run-once guard (per page render)
-  if (window.__q_onload_ran__) return; window.__q_onload_ran__ = true;
-
   // --- keep Next programmatically usable but invisible ---
   try {
     var nb = document.getElementById('NextButton');
@@ -47,9 +44,6 @@ Qualtrics.SurveyEngine.addOnload(function () {
 
 
 Qualtrics.SurveyEngine.addOnReady(function () {
-  // run-once guard (per page render)
-  if (window.__q_onready_ran__) return; window.__q_onready_ran__ = true;
-
   var q = this;
 
   // ===== ED logging (always on; disable via ED debug_edlog=0) =====
@@ -74,30 +68,54 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     Qualtrics.SurveyEngine.setEmbeddedData("is_preview", IS_PREVIEW ? "1" : "0");
   } catch(e) {}
 
-  // ---- session + ordering stamps (idempotent across soft re-renders) ----
+  // ---- session + ordering stamps (hardened v3: per-seq sessionStorage) ----
   try {
-    // loop/ordering stamp
-    var seqStr = "${lm://CurrentLoopNumber}";
-    var seq = parseInt((seqStr||"").replace(/[^\d]/g,''),10);
-    if (!isNaN(seq)) Qualtrics.SurveyEngine.setEmbeddedData("scenario_seq", String(seq));
-    Qualtrics.SurveyEngine.setEmbeddedData("scenario_ts_ms", String(Date.now()));
+    // Qualtrics loop number → numeric sequence
+    var seqRaw = "${lm://CurrentLoopNumber}";
+    var seqNum = parseInt(String(seqRaw || "").replace(/[^\d]/g, ""), 10);
+    var seqKey = isNaN(seqNum) ? "na" : String(seqNum);
 
-    // sticky SESSION_ID: prefer existing from top-window or localStorage, else generate
-    (function(){
-      var SID_KEY = "Q_SESSION_ID";
-      var sid = null;
+    // Write the sequence to ED for analytics
+    if (!isNaN(seqNum)) {
+      Qualtrics.SurveyEngine.setEmbeddedData("scenario_seq", String(seqNum));
+    }
 
-      try { sid = (window.top && window.top.__Q_SESSION_ID) || null; } catch(e){}
-      if (!sid) { try { sid = localStorage.getItem(SID_KEY); } catch(e){} }
-      if (!sid || sid === "SESSION_ID") {
-        var rnd = Math.floor(Math.random() * 1e6).toString(36);
-        sid = "S" + Date.now() + "-" + rnd;
-        try { localStorage.setItem(SID_KEY, sid); } catch(e){}
-      }
-      try { if (window.top) window.top.__Q_SESSION_ID = sid; } catch(e){}
-      Qualtrics.SurveyEngine.setEmbeddedData("SESSION_ID", sid);
-    })();
-  } catch(e){}
+    // Per-scenario, page-stable timestamp:
+    //  - read/write from sessionStorage using the loop number as the key
+    //  - guarantees same ts across duplicate inits on this page
+    //  - new ts when you advance to the next scenario (different loop number)
+    var TS_KEY = "SCEN_TS__" + seqKey;
+    var tsStored = null;
+    try { tsStored = sessionStorage.getItem(TS_KEY); } catch (_) {}
+
+    var tsFinal = parseInt(tsStored || "", 10);
+    if (!isFinite(tsFinal) || tsFinal <= 0) {
+      tsFinal = Date.now();
+      try { sessionStorage.setItem(TS_KEY, String(tsFinal)); } catch (_) {}
+    }
+
+    // Also mirror to a window cache (useful if sessionStorage is blocked)
+    window.__SCEN_T0S = window.__SCEN_T0S || {};
+    window.__SCEN_T0S[TS_KEY] = tsFinal;
+
+    // Publish to ED (now per-page stable, per-scenario fresh)
+    Qualtrics.SurveyEngine.setEmbeddedData("scenario_ts_ms", String(tsFinal));
+
+    // Stable session id across the whole preview/run
+    var SID_KEY = "JFE_SESSION_ID";
+    var sid = window.__SID
+          || (function(){ try { return sessionStorage.getItem(SID_KEY); } catch(_) { return null; } })()
+          || Qualtrics.SurveyEngine.getEmbeddedData("SESSION_ID");
+
+    if (!sid || sid === "SESSION_ID") {
+      sid = "S" + Date.now() + "-" + Math.floor(Math.random() * 1e6).toString(36);
+      try { sessionStorage.setItem(SID_KEY, sid); } catch(_) {}
+    }
+    window.__SID = sid;
+    Qualtrics.SurveyEngine.setEmbeddedData("SESSION_ID", sid);
+  } catch (e) {}
+
+
 
   // ===== helpers =====
   function toNum(v){ if(v==null){return null;} var s=String(v).replace(/[^\d\.\-]/g,'').replace(/(\..*)\./g,'$1'); var n=parseFloat(s); return isFinite(n)?n:null; }
@@ -172,6 +190,12 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var rollingBal = toNum(ED("rolling_balance"));
   var rollingQty = parseInt(ED("rolling_pos_qty")||"",10);
   var rollingPx  = toNum(ED("rolling_pos_px"));
+
+  // NEW: rolling session totals for fees & realized P/L
+  var rollingFees = toNum(ED("rolling_fees"));
+  if (rollingFees==null || !isFinite(rollingFees)) rollingFees = 0;
+  var rollingRealized = toNum(ED("rolling_realized_pl"));
+  if (rollingRealized==null || !isFinite(rollingRealized)) rollingRealized = 0;
 
   // derive starting balance & position
   var balance0 = (CARRY && rollingBal!=null) ? rollingBal
@@ -310,6 +334,17 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   // >>> pre/post instrumentation
   var preExec = null, preFvUsed = null, preEntryPxUsed = null, editCount = 0, rt_to_place_ms = null;
 
+  // NEW: fee/slippage + session totals scaffolding
+  var SLIP_BPS = isNum(scenario.slippage_bps) ? scenario.slippage_bps : 0;
+  var COMM_BPS = isNum(scenario.commission_bps) ? scenario.commission_bps : 0;
+  var feesTrade = 0; // will be set at confirm
+  var realizedTrade = 0; // updated at close if we flatten
+
+  // NEW: sides scaffold (buy-only UI right now)
+  var allowedSides = String(scenario.allowed_sides||"").toLowerCase();
+  var buyAllowed = !allowedSides || /buy/.test(allowedSides);
+  try { Qualtrics.SurveyEngine.setEmbeddedData("buy_allowed", buyAllowed ? "1":"0"); } catch(e){}
+
   function lastPx(){ // prefer the current plotted last if available
     if (isNum(window._lastShown)) return window._lastShown;
     var canvasStep = window._chart && window._chart.prices ? window._chart.prices : prices;
@@ -387,6 +422,8 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }
 
     try{
+      if (!buyAllowed) { alert("Buying is disabled in this scenario."); return; }
+
       var ordType = jQuery("#ordType").val();
       var ordPxRaw = jQuery("#ordPx").val();
       var ordPx = (ordPxRaw===""||ordPxRaw==null) ? NaN : parseFloat(ordPxRaw);
@@ -397,7 +434,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
       if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
 
-      // hypothetical fill
+      // hypothetical fill (pre-slippage)
       var fillPx = lastPx(), filled = 0;
       if(ordType==="Market"){ fillPx = isNum(scenario.ask)?scenario.ask:lastPx(); filled=qty; }
       else if(ordType==="Limit"){
@@ -437,24 +474,42 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     if(!pending){ return; }
 
     try{
-      var delta = -((exec && exec.filled ? exec.filled : 0) * (exec && exec.fillPx ? exec.fillPx : lastPx()));
+      var filled = (exec && exec.filled) || 0;
+      var baseFillPx = (exec && exec.fillPx) || lastPx();
+
+      // slippage applied to price (buy-only): effective price
+      var slipMult = 1 + (SLIP_BPS/10000);
+      var effFillPx = baseFillPx * slipMult;
+
+      // commissions on effective notional
+      var notionalEff = filled * effFillPx;
+      feesTrade = (COMM_BPS/10000) * notionalEff;
+
+      // cash impact = - notional - fees (buy)
+      var delta = -(notionalEff + (feesTrade||0));
       exec.cash_delta = delta;
+
       var newBal = balance0 + delta;
       flashBalance(newBal, delta);
       balance0 = newBal;
 
-      // update position for buy-only flow
-      var filled = (exec && exec.filled) || 0;
-      var fillPx = (exec && exec.fillPx)  || lastPx();
+      // update position (average cost uses effective fill price; fees kept separate)
       if (filled > 0) {
         var priorNotional = (posAvg0!=null ? posAvg0 * posQty0 : 0);
-        var newNotional = priorNotional + fillPx * filled;
+        var newNotional = priorNotional + effFillPx * filled;
         posQty0 = posQty0 + filled;
         posAvg0 = posQty0 > 0 ? (newNotional / posQty0) : null;
 
         jQuery("#posQty, #posQty_bottom").text(posQty0);
         jQuery("#posPx").text((posAvg0!=null && isFinite(posAvg0)) ? posAvg0.toFixed(2) : "—");
       }
+
+      // expose for logging
+      try {
+        Qualtrics.SurveyEngine.setEmbeddedData("exec_fillPx_eff", effFillPx.toFixed(4));
+        Qualtrics.SurveyEngine.setEmbeddedData("fees_trade", (feesTrade||0).toFixed(2));
+        Qualtrics.SurveyEngine.setEmbeddedData("side", "Buy");
+      } catch(e){}
     }catch(err){ try{ console.error("Commit error:", err); }catch(e){} }
 
     try{ jQuery("#confirm,#place").prop("disabled", true); }catch(e){}
@@ -526,9 +581,12 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
       // realize or carry per close_method
       var cm = (scenario.close_method || "").toLowerCase();
+      realizedTrade = 0;
       if (cm === "close_at_last") {
         // realize P/L and flatten
         balance0 = balance0 + (isNum(unrlExit) ? unrlExit : 0);
+        realizedTrade = isNum(unrlExit) ? unrlExit : 0;
+
         posQty0 = 0;
         posAvg0 = null;
         jQuery("#balanceTxt, #balanceTxt_bottom").text(numPretty(balance0));
@@ -536,6 +594,10 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         jQuery("#posPx").text("—");
         jQuery("#unrl, #unrl_bottom").text("—");
       }
+
+      // session roll-ups
+      rollingFees = (rollingFees||0) + (feesTrade||0);
+      rollingRealized = (rollingRealized||0) + (realizedTrade||0);
 
       var metrics = deriveBias(exec, fv, target, scenario.sentiment_pct);
 
@@ -596,6 +658,17 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         Qualtrics.SurveyEngine.setEmbeddedData("rolling_pos_qty", String(posQty0));
         Qualtrics.SurveyEngine.setEmbeddedData("rolling_pos_px",  (posAvg0!=null && isFinite(posAvg0)) ? posAvg0.toFixed(6) : "");
       }
+
+      // NEW: fees & realized P/L EDs (per trade + session rollups)
+      Qualtrics.SurveyEngine.setEmbeddedData("fees_trade", (feesTrade||0).toFixed(2));
+      Qualtrics.SurveyEngine.setEmbeddedData("fees_session", (rollingFees||0).toFixed(2));
+      Qualtrics.SurveyEngine.setEmbeddedData("realized_pl_trade", (realizedTrade||0).toFixed(2));
+      Qualtrics.SurveyEngine.setEmbeddedData("realized_pl_session", (rollingRealized||0).toFixed(2));
+
+      // persist session totals for next page
+      Qualtrics.SurveyEngine.setEmbeddedData("rolling_fees", (rollingFees||0).toFixed(6));
+      Qualtrics.SurveyEngine.setEmbeddedData("rolling_realized_pl", (rollingRealized||0).toFixed(6));
+
     }catch(err){ try{ console.error("submitAndAdvance error:", err); }catch(e){} }
     advance();
   }
