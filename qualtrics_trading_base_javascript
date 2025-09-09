@@ -1,5 +1,8 @@
 // Keep Next present (off-screen) so Qualtrics accepts navigation.
 Qualtrics.SurveyEngine.addOnload(function () {
+  // run-once guard (per page render)
+  if (window.__q_onload_ran__) return; window.__q_onload_ran__ = true;
+
   // --- keep Next programmatically usable but invisible ---
   try {
     var nb = document.getElementById('NextButton');
@@ -44,6 +47,9 @@ Qualtrics.SurveyEngine.addOnload(function () {
 
 
 Qualtrics.SurveyEngine.addOnReady(function () {
+  // run-once guard (per page render)
+  if (window.__q_onready_ran__) return; window.__q_onready_ran__ = true;
+
   var q = this;
 
   // ===== ED logging (always on; disable via ED debug_edlog=0) =====
@@ -67,6 +73,31 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     IS_PREVIEW = /[?&]Q_CHL=preview(&|$)/.test(location.search);
     Qualtrics.SurveyEngine.setEmbeddedData("is_preview", IS_PREVIEW ? "1" : "0");
   } catch(e) {}
+
+  // ---- session + ordering stamps (idempotent across soft re-renders) ----
+  try {
+    // loop/ordering stamp
+    var seqStr = "${lm://CurrentLoopNumber}";
+    var seq = parseInt((seqStr||"").replace(/[^\d]/g,''),10);
+    if (!isNaN(seq)) Qualtrics.SurveyEngine.setEmbeddedData("scenario_seq", String(seq));
+    Qualtrics.SurveyEngine.setEmbeddedData("scenario_ts_ms", String(Date.now()));
+
+    // sticky SESSION_ID: prefer existing from top-window or localStorage, else generate
+    (function(){
+      var SID_KEY = "Q_SESSION_ID";
+      var sid = null;
+
+      try { sid = (window.top && window.top.__Q_SESSION_ID) || null; } catch(e){}
+      if (!sid) { try { sid = localStorage.getItem(SID_KEY); } catch(e){} }
+      if (!sid || sid === "SESSION_ID") {
+        var rnd = Math.floor(Math.random() * 1e6).toString(36);
+        sid = "S" + Date.now() + "-" + rnd;
+        try { localStorage.setItem(SID_KEY, sid); } catch(e){}
+      }
+      try { if (window.top) window.top.__Q_SESSION_ID = sid; } catch(e){}
+      Qualtrics.SurveyEngine.setEmbeddedData("SESSION_ID", sid);
+    })();
+  } catch(e){}
 
   // ===== helpers =====
   function toNum(v){ if(v==null){return null;} var s=String(v).replace(/[^\d\.\-]/g,'').replace(/(\..*)\./g,'$1'); var n=parseFloat(s); return isFinite(n)?n:null; }
