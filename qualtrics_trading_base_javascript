@@ -81,9 +81,6 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }
 
     // Per-scenario, page-stable timestamp:
-    //  - read/write from sessionStorage using the loop number as the key
-    //  - guarantees same ts across duplicate inits on this page
-    //  - new ts when you advance to the next scenario (different loop number)
     var TS_KEY = "SCEN_TS__" + seqKey;
     var tsStored = null;
     try { tsStored = sessionStorage.getItem(TS_KEY); } catch (_) {}
@@ -177,7 +174,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     narrative: ED("narrative")
   };
 
-  // ===== minimal UI presence check =====
+  // ===== minimal UI presence check (fixed typo) =====
   (function(){
     var NEED = ["scenarioName","narrative","sym","symChart","sessionTag","balanceTxt","balanceTxt_bottom","lastPillTxt","last","bid","ask","posQty","posQty_bottom","posPx","sentfill","sentPct","newsHead","newsBody","newsImg","targetTxt","fvTxt","fv","px","unrl","unrl_bottom"];
     var missing = [];
@@ -246,6 +243,67 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   function togglePx(){ var ot=jQuery("#ordType").val(); var $wrap=jQuery("#ordPx").closest('div'); if($wrap&&$wrap.length){ (ot==="Market")?$wrap.hide():$wrap.show(); } }
   togglePx(); jQuery("#ordType").on("change", togglePx);
 
+  // ===== Costs footnote — aligned, muted, resilient =====
+  (function feeFootnote_v3(){
+    // 0) Clean up any earlier attempts
+    ["feeBox","orderFeeRow","feePillCSS","feeLabelsCSS","feeFootCSS","feeFootnote"].forEach(function(id){
+      var el=document.getElementById(id); if(el&&el.parentNode) el.parentNode.removeChild(el);
+    });
+
+    // 1) Container: the entire question (stable) + try to match the order panel width
+    var $q = jQuery('#'+q.questionId);
+    if (!$q.length) return;
+    var $panel = jQuery('#place').closest('.QuestionBody, .card, .panel, .q-contents, form');
+    var maxW = ($panel.length ? $panel.outerWidth() : 640);
+
+    // 2) Styles (muted, footnote-y)
+    if (!document.getElementById('feeFootCSS')) {
+      var css = document.createElement('style');
+      css.id = 'feeFootCSS';
+      css.textContent = `
+        #feeFootnote{ display:block; clear:both; max-width: ${Math.max(480, maxW||640)}px;
+          margin:10px auto 0 auto; padding:4px 0;
+          font-size:.72rem; line-height:1.3; color:#6b7280; font-style:italic;
+          border-top:1px dotted #e5e7eb; text-align:left; }
+        #feeFootnote .k{ color:#9ca3af; }
+      `;
+      document.head.appendChild(css);
+    }
+
+    // 3) Helpers
+    function fmtBps(b){ return (b==null || isNaN(b)) ? "—" : (Number(b).toFixed(0) + " bps (" + (Number(b)/100).toFixed(2) + "%)"); }
+    function spreadStats(){
+      var bid = toNum(jQuery("#bid").text());
+      var ask = toNum(jQuery("#ask").text());
+      if (!isNum(bid) || !isNum(ask) || ask<=0 || bid<=0 || ask<=bid) return "—";
+      var spr = ask - bid, mid = (ask + bid)/2, sprBps = (spr/mid)*10000;
+      return "$"+spr.toFixed(2)+" ("+sprBps.toFixed(0)+" bps)";
+    }
+
+    function renderText(){
+      var commTxt = fmtBps(scenario.commission_bps);
+      var slipTxt = fmtBps(scenario.slippage_bps);
+      var sprTxt  = spreadStats();
+      return '<span class="k">Costs:</span> '+
+            'Commission '+commTxt+'. '+
+            'Slippage '+slipTxt+' (applied to fills; + for Buy, − for Sell). '+
+            'Current spread '+sprTxt+'.';
+    }
+
+    // 4) Create once and update text
+    var $foot = jQuery('<div id="feeFootnote"></div>');
+    $foot.html(renderText());
+    $q.append($foot);
+
+    // 5) Keep spread fresh
+    var _ffInt = setInterval(function(){
+      var node = document.getElementById('feeFootnote');
+      if (!node || !document.body.contains(node)) { clearInterval(_ffInt); return; }
+      node.innerHTML = renderText();
+    }, Math.max(1200, (scenario.tick_ms||1200)));
+  })();
+
+
   // ===== prices & chart (robust sizing; crisp on HiDPI) =====
   var prices = [];
   try { prices = JSON.parse(scenario.prices_json || "[]"); } catch(e){ prices = []; }
@@ -293,6 +351,18 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       // live unrealized P/L
       var unrl = (posAvg0!=null && posQty0>0) ? (lastShown - posAvg0) * posQty0 : null;
       jQuery("#unrl, #unrl_bottom").text(unrl==null ? "—" : signedFmt(unrl,2));
+
+      // Update spread label if present
+      if (document.getElementById('fee_spread')) {
+        var bidN = toNum(jQuery("#bid").text());
+        var askN = toNum(jQuery("#ask").text());
+        if (isNum(bidN) && isNum(askN) && askN>bidN) {
+          var spr = askN - bidN;
+          var mid = (askN + bidN)/2;
+          var sprBps = (spr/mid)*10000;
+          jQuery("#fee_spread").text("$"+spr.toFixed(2)+" ("+sprBps.toFixed(0)+" bps)");
+        }
+      }
     }
     draw(i);
     var step = Math.max(120, scenario.tick_ms || 450);
@@ -326,7 +396,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     jQuery("#timer").text("—");
   }
 
-  // ===== order flow (unchanged core) =====
+  // ===== order flow =====
   var pending=false, hinted=false, exec=null;
   var DEFAULT_ORDER = scenario.default_order || "Market";
   var DEFAULT_QTY   = scenario.default_qty || 200;
@@ -334,16 +404,79 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   // >>> pre/post instrumentation
   var preExec = null, preFvUsed = null, preEntryPxUsed = null, editCount = 0, rt_to_place_ms = null;
 
-  // NEW: fee/slippage + session totals scaffolding
+  // Fee/slippage + session totals scaffolding
   var SLIP_BPS = isNum(scenario.slippage_bps) ? scenario.slippage_bps : 0;
   var COMM_BPS = isNum(scenario.commission_bps) ? scenario.commission_bps : 0;
-  var feesTrade = 0; // will be set at confirm
-  var realizedTrade = 0; // updated at close if we flatten
+  var feesTrade = 0;      // set at commit
+  var realizedTrade = 0;  // set if we close size on SELL or flatten
 
-  // NEW: sides scaffold (buy-only UI right now)
+  // Sides scaffold
   var allowedSides = String(scenario.allowed_sides||"").toLowerCase();
-  var buyAllowed = !allowedSides || /buy/.test(allowedSides);
+  var buyAllowed  = !allowedSides || /buy/.test(allowedSides);
+  var sellAllowed = !allowedSides || /sell/.test(allowedSides);
+  var allowShortingFlag = String(scenario.allow_shorting||"0") === "1";
   try { Qualtrics.SurveyEngine.setEmbeddedData("buy_allowed", buyAllowed ? "1":"0"); } catch(e){}
+
+  // ===== One clean row: Side | Quantity | Order Type | Limit/Stop Price =====
+  (function sideSelectorRow(){
+    jQuery('#orderRow,#sideCSS3,#sideWrap').remove();
+
+    // Allowed options
+    var opts = [];
+    if (buyAllowed)  opts.push('<option value="Buy">Buy</option>');
+    if (sellAllowed) opts.push('<option value="Sell">Sell</option>');
+    if (opts.length === 0) return;
+
+    // Unified row styling
+    if (!document.getElementById('sideCSS3')) {
+      var css = document.createElement('style');
+      css.id = 'sideCSS3';
+      css.textContent = `
+        #orderRow{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;align-items:flex-end}
+        #orderRow .field{flex:1 1 140px;min-width:120px;display:flex;flex-direction:column}
+        #orderRow label{font-size:.8rem;color:#6b7280;margin-bottom:2px}
+        #side{height:38px;padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem}
+        @media (max-width: 720px){ #orderRow{flex-direction:column} }
+      `;
+      document.head.appendChild(css);
+    }
+
+    // Grab existing blocks
+    var $ordTypeBlock = jQuery('#ordType').length ? jQuery('#ordType').closest('div') : jQuery();
+    var $pxBlock      = jQuery('#ordPx').length   ? jQuery('#ordPx').closest('div')   : jQuery();
+    var $qtyBlock     = jQuery('#qty').length     ? jQuery('#qty').closest('div')     : jQuery();
+    var $panel        = jQuery('#place').closest('.QuestionBody, .card, .panel, .q-contents, form, body');
+    var $anchor       = $ordTypeBlock.length ? $ordTypeBlock : $panel;
+    if (!$anchor.length) return;
+
+    // Insert unified row
+    var $row = jQuery('<div id="orderRow"></div>');
+    $anchor.before($row);
+
+    // Side
+    $row.append(
+      '<div id="sideWrap" class="field">'+
+      ' <label for="side">Side</label>'+
+      ' <select id="side">'+opts.join('')+'</select>'+
+      '</div>'
+    );
+
+    // Quantity
+    if ($qtyBlock.length) $qtyBlock.addClass('field').appendTo($row);
+
+    // Order Type
+    if ($ordTypeBlock.length) $ordTypeBlock.addClass('field').appendTo($row);
+
+    // Limit/Stop Price
+    if ($pxBlock.length) $pxBlock.addClass('field').appendTo($row);
+
+    // Default side selection
+    var defSide = (scenario.default_side && /sell/i.test(scenario.default_side)) ? "Sell" : "Buy";
+    if (!sellAllowed && defSide==="Sell") defSide = "Buy";
+    if (!buyAllowed  && defSide==="Buy")  defSide = "Sell";
+    jQuery('#side').val(defSide);
+  })();
+
 
   function lastPx(){ // prefer the current plotted last if available
     if (isNum(window._lastShown)) return window._lastShown;
@@ -358,6 +491,8 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     setTimeout(function(){ jQuery(".bal").removeClass(cls); }, 600);
   }
   function resetOrderUI(){
+    // preserve side choice; reset order specifics
+    var sideVal = jQuery('#side').val();
     jQuery("#ordType").val(DEFAULT_ORDER);
     jQuery("#ordPx").val("");
     jQuery("#qty").val(DEFAULT_QTY);
@@ -366,28 +501,41 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     jQuery("#hint").hide().empty();
     jQuery("#confirm").hide();
     jQuery("#place").text("Place Order").removeClass("btn-ghost").addClass("btn-primary");
+    if (document.getElementById('side')) jQuery('#side').val(sideVal);
     try { togglePx(); } catch(e){}
   }
   function entryPriceFor(e){
     if (!e) return lastPx();
-    var px = (e.ordType==="Market") ? (isNum(scenario.ask)?scenario.ask:lastPx())
-                                    : (isNum(e.ordPx)?e.ordPx:(isNum(scenario.ask)?scenario.ask:lastPx()));
-    return isNum(px)?px:lastPx();
+    var SIDE = e.side || "Buy";
+    var baseRef = lastPx();
+    if (e.ordType==="Market"){
+      if (SIDE==="Sell") return isNum(scenario.bid)?scenario.bid:baseRef;
+      return isNum(scenario.ask)?scenario.ask:baseRef;
+    }
+    var px = isNum(e.ordPx)? e.ordPx : baseRef;
+    return isNum(px)?px:baseRef;
+  }
+  function capSellQtyForNoShort(qty){
+    if (!allowShortingFlag && qty > posQty0) return Math.max(0, posQty0);
+    return qty;
   }
 
   function renderNudge(exec, fvInput, anchorVal, herdPct, hotFlg){
     var fvNum   = coerceNum(fvInput, jQuery("#fv").val(), scenario.fair_value, lastPx());
     var askN    = coerceNum(scenario.ask, jQuery("#ask").text());
     var bidN    = coerceNum(scenario.bid, jQuery("#bid").text());
-    var entryPx = (exec && exec.ordType==="Market") ? coerceNum(scenario.ask, jQuery("#ask").text(), lastPx())
-                                                    : coerceNum(exec && exec.ordPx, scenario.ask, jQuery("#ask").text(), lastPx());
+    var entryPx = (exec && exec.ordType==="Market")
+      ? (exec.side==="Sell" ? coerceNum(scenario.bid, jQuery("#bid").text(), lastPx())
+                            : coerceNum(scenario.ask, jQuery("#ask").text(), lastPx()))
+      : coerceNum(exec && exec.ordPx, (exec.side==="Sell"? scenario.bid:scenario.ask), (exec.side==="Sell"? jQuery("#bid").text():jQuery("#ask").text()), lastPx());
+
     if(!isNum(fvNum)) fvNum = lastPx();
     if(!isNum(entryPx)) entryPx = lastPx();
     var spr = (isNum(askN)&&isNum(bidN)) ? (askN-bidN) : 0;
     var dist = entryPx - fvNum;
 
     var html = ''
-      + '<div><b>Quick check</b>: Your <span class="nh-ord"></span> entry is '
+      + '<div><b>Quick check</b>: Your <span class="nh-side"></span> <span class="nh-ord"></span> entry is '
       + '<span class="nh-dist"></span> vs fair value <span class="nh-fv"></span>.'
       + '<br>Spread is <span class="nh-spr"></span>. Consider execution cost vs expected move.';
     if (toNum(anchorVal)!=null){ html += '<br>Do not over-weight the target <span class="nh-anchor"></span> (possible <i>anchor</i>).'; }
@@ -397,6 +545,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
     jQuery("#hint").html(html).show();
     jQuery("#hint .nh-ord").text(exec && exec.ordType ? exec.ordType : "Market");
+    jQuery("#hint .nh-side").text(exec && exec.side ? exec.side : "Buy");
     jQuery("#hint .nh-dist").text(signedFmt(dist,2));
     jQuery("#hint .nh-fv").text(fmt(fvNum,2));
     jQuery("#hint .nh-spr").text(fmt(spr,2));
@@ -422,7 +571,11 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }
 
     try{
-      if (!buyAllowed) { alert("Buying is disabled in this scenario."); return; }
+      var sideSel = document.getElementById('side');
+      var SIDE = sideSel ? sideSel.value : (buyAllowed ? "Buy" : "Sell");
+
+      if (SIDE === "Buy" && !buyAllowed) { alert("Buying is disabled in this scenario."); return; }
+      if (SIDE === "Sell" && !sellAllowed) { alert("Selling is disabled in this scenario."); return; }
 
       var ordType = jQuery("#ordType").val();
       var ordPxRaw = jQuery("#ordPx").val();
@@ -434,20 +587,52 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       if(!qty || qty<1){ alert("Enter a valid quantity."); return; }
       if((ordType!=="Market") && (isNaN(ordPx))){ alert("Enter a valid price for Limit/Stop."); return; }
 
-      // hypothetical fill (pre-slippage)
-      var fillPx = lastPx(), filled = 0;
-      if(ordType==="Market"){ fillPx = isNum(scenario.ask)?scenario.ask:lastPx(); filled=qty; }
-      else if(ordType==="Limit"){
-        if(!isNaN(ordPx) && isNum(scenario.ask) && ordPx>=scenario.ask){ fillPx=ordPx; filled=qty; }
-        else { fillPx=!isNaN(ordPx)?ordPx:(scenario.ask||lastPx()); filled = Math.floor(qty*Math.max(0, (!isNaN(ordPx)&&isNum(scenario.ask)? ordPx/scenario.ask : 0))); }
-      } else if(ordType==="Stop"){ if(!isNaN(ordPx) && lastPx()>=ordPx){ fillPx=lastPx(); filled=qty; } }
+      if (SIDE === "Sell" && !allowShortingFlag) {
+        // cap to current long if shorting not allowed
+        var capped = capSellQtyForNoShort(qty);
+        if (capped === 0) { alert("No long position to sell. Shorting is disabled."); return; }
+        if (capped !== qty) { qty = capped; jQuery("#qty").val(String(qty)); }
+      }
 
-      exec = { ordType:ordType, ordPx:isNaN(ordPx)?null:ordPx, qty:qty, filled:filled, fillPx:fillPx,
+      // hypothetical fill (pre-slippage) – side-aware reference
+      var baseRef = lastPx(), filled = 0, fillPx = baseRef;
+      if(ordType==="Market"){
+        fillPx = (SIDE==="Sell")
+          ? (isNum(scenario.bid)?scenario.bid:lastPx())
+          : (isNum(scenario.ask)?scenario.ask:lastPx());
+        filled=qty;
+      }
+      else if(ordType==="Limit"){
+        if (!isNaN(ordPx)) {
+          if (SIDE==="Sell") {
+            // for sells, willing to sell if limit <= bid (aggressive enough)
+            if (isNum(scenario.bid) && ordPx <= scenario.bid){ fillPx = ordPx; filled=qty; }
+            else { fillPx = ordPx; filled = Math.floor(qty*Math.max(0, (isNum(scenario.bid)? scenario.bid/ordPx : 0))); }
+          } else {
+            if (isNum(scenario.ask) && ordPx >= scenario.ask){ fillPx = ordPx; filled=qty; }
+            else { fillPx = ordPx; filled = Math.floor(qty*Math.max(0, (isNum(scenario.ask)? ordPx/scenario.ask : 0))); }
+          }
+        } else {
+          fillPx = (SIDE==="Sell") ? (scenario.bid||lastPx()) : (scenario.ask||lastPx());
+          filled = 0;
+        }
+      }
+      else if(ordType==="Stop"){
+        if(!isNaN(ordPx)) {
+          if (SIDE==="Sell") {
+            if (lastPx() <= ordPx){ fillPx=lastPx(); filled=qty; }
+          } else {
+            if (lastPx() >= ordPx){ fillPx=lastPx(); filled=qty; }
+          }
+        }
+      }
+
+      exec = { side:SIDE, ordType:ordType, ordPx:isNaN(ordPx)?null:ordPx, qty:qty, filled:filled, fillPx:fillPx,
                useSL:useSL, useTP:useTP, cash_delta:0, ts:Date.now() };
 
       // first Place snapshot
       if (preExec == null){
-        preExec = { ordType:exec.ordType, ordPx:exec.ordPx, qty:exec.qty, filled:exec.filled, fillPx:exec.fillPx, ts:exec.ts };
+        preExec = { side:SIDE, ordType:exec.ordType, ordPx:exec.ordPx, qty:exec.qty, filled:exec.filled, fillPx:exec.fillPx, ts:exec.ts };
         preFvUsed = coerceNum(jQuery("#fv").val(), scenario.fair_value, lastPx()); if(!isNum(preFvUsed)) preFvUsed = lastPx();
         preEntryPxUsed = entryPriceFor(exec);
         rt_to_place_ms = Date.now() - t0;
@@ -474,42 +659,110 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     if(!pending){ return; }
 
     try{
+      var SIDE = (exec && exec.side) || "Buy";
       var filled = (exec && exec.filled) || 0;
       var baseFillPx = (exec && exec.fillPx) || lastPx();
 
-      // slippage applied to price (buy-only): effective price
-      var slipMult = 1 + (SLIP_BPS/10000);
+      // slippage applied to price:
+      // Buy: price * (1 + SLIP), Sell: price * (1 - SLIP)
+      var slipMult = (SIDE === "Sell") ? (1 - (SLIP_BPS/10000)) : (1 + (SLIP_BPS/10000));
       var effFillPx = baseFillPx * slipMult;
 
       // commissions on effective notional
       var notionalEff = filled * effFillPx;
-      feesTrade = (COMM_BPS/10000) * notionalEff;
+      feesTrade = (COMM_BPS/10000) * Math.abs(notionalEff);
 
-      // cash impact = - notional - fees (buy)
-      var delta = -(notionalEff + (feesTrade||0));
+      // cash impact
+      var delta = (SIDE === "Sell")
+        ? ( +notionalEff - (feesTrade||0) )
+        : ( -notionalEff - (feesTrade||0) );
+
       exec.cash_delta = delta;
 
       var newBal = balance0 + delta;
       flashBalance(newBal, delta);
       balance0 = newBal;
 
-      // update position (average cost uses effective fill price; fees kept separate)
-      if (filled > 0) {
-        var priorNotional = (posAvg0!=null ? posAvg0 * posQty0 : 0);
-        var newNotional = priorNotional + effFillPx * filled;
-        posQty0 = posQty0 + filled;
-        posAvg0 = posQty0 > 0 ? (newNotional / posQty0) : null;
+      // position updates + realized P/L if SELL reduces existing long
+      realizedTrade = 0;
 
-        jQuery("#posQty, #posQty_bottom").text(posQty0);
-        jQuery("#posPx").text((posAvg0!=null && isFinite(posAvg0)) ? posAvg0.toFixed(2) : "—");
+      if (SIDE === "Buy") {
+        if (filled > 0) {
+          var priorNotional = (posAvg0!=null ? posAvg0 * posQty0 : 0);
+          var newNotional = priorNotional + effFillPx * filled;
+          posQty0 = posQty0 + filled;
+          posAvg0 = posQty0 > 0 ? (newNotional / posQty0) : null;
+        }
+      } else { // SELL
+        if (filled > 0) {
+          // portion that reduces current long
+          var reduce = Math.min(filled, Math.max(0, posQty0|0));
+          var extra  = filled - reduce; // possible short open
+
+          if (reduce > 0) {
+            if (isNum(posAvg0)) {
+              realizedTrade += (effFillPx - posAvg0) * reduce;
+            }
+            var remainingQty = posQty0 - reduce;
+            if (remainingQty <= 0) {
+              posQty0 = 0; posAvg0 = null;
+            } else {
+              var remainingNotional = posAvg0 * remainingQty;
+              posQty0 = remainingQty;
+              posAvg0 = remainingNotional / remainingQty;
+            }
+          }
+
+          // Optional short opening
+          if (extra > 0) {
+            if (!allowShortingFlag) {
+              // Safety: reverse the extra portion in cash (shouldn't occur due to cap earlier)
+              var extraNotional = extra * effFillPx;
+              var extraFees     = (COMM_BPS/10000) * Math.abs(extraNotional);
+              var refund = -(+extraNotional - extraFees);
+              balance0 += refund;
+              flashBalance(balance0, refund);
+              exec.filled = reduce;
+            } else {
+              // Open short: negative qty, track avg at effFillPx (simple convention)
+              posQty0 = posQty0 - extra;  // becomes negative
+              posAvg0 = effFillPx;
+            }
+          }
+        }
       }
+
+      // update UI
+      jQuery("#posQty, #posQty_bottom").text(posQty0);
+      jQuery("#posPx").text((posAvg0!=null && isFinite(posAvg0)) ? posAvg0.toFixed(2) : "—");
+
+      // rolling session updates
+      rollingFees = (rollingFees||0) + (feesTrade||0);
+      rollingRealized = (rollingRealized||0) + (realizedTrade||0);
 
       // expose for logging
       try {
         Qualtrics.SurveyEngine.setEmbeddedData("exec_fillPx_eff", effFillPx.toFixed(4));
         Qualtrics.SurveyEngine.setEmbeddedData("fees_trade", (feesTrade||0).toFixed(2));
-        Qualtrics.SurveyEngine.setEmbeddedData("side", "Buy");
+        Qualtrics.SurveyEngine.setEmbeddedData("side", SIDE);
       } catch(e){}
+
+      // Optional tiny toast for quick QA:
+      try{
+        var el = document.getElementById('commitToast');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'commitToast';
+          el.style.cssText = "position:fixed;right:12px;bottom:12px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,.08);font:14px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu;z-index:9999";
+          document.body.appendChild(el);
+        }
+        el.innerHTML = "<b>"+(exec.side||'Buy')+"</b> "+(exec.filled||0)+" @ "+(effFillPx?effFillPx.toFixed(4):"—")
+          + "<br>Fees: "+((feesTrade||0).toFixed(2))
+          + "<br>Realized: "+((realizedTrade||0).toFixed(2));
+        el.style.opacity = "1";
+        setTimeout(function(){ el.style.opacity="0"; }, 1800);
+      }catch(_e){}
+
     }catch(err){ try{ console.error("Commit error:", err); }catch(e){} }
 
     try{ jQuery("#confirm,#place").prop("disabled", true); }catch(e){}
@@ -581,11 +834,11 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
       // realize or carry per close_method
       var cm = (scenario.close_method || "").toLowerCase();
-      realizedTrade = 0;
+      var realizedFromFlatten = 0;
       if (cm === "close_at_last") {
         // realize P/L and flatten
         balance0 = balance0 + (isNum(unrlExit) ? unrlExit : 0);
-        realizedTrade = isNum(unrlExit) ? unrlExit : 0;
+        realizedFromFlatten = isNum(unrlExit) ? unrlExit : 0;
 
         posQty0 = 0;
         posAvg0 = null;
@@ -595,9 +848,9 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         jQuery("#unrl, #unrl_bottom").text("—");
       }
 
-      // session roll-ups
-      rollingFees = (rollingFees||0) + (feesTrade||0);
-      rollingRealized = (rollingRealized||0) + (realizedTrade||0);
+      // session roll-ups (fees already rolled on commit; realized includes any SELL close + flatten)
+      var realizedThisScenario = (realizedTrade||0) + (realizedFromFlatten||0);
+      rollingRealized = (rollingRealized||0) + (realizedFromFlatten||0);
 
       var metrics = deriveBias(exec, fv, target, scenario.sentiment_pct);
 
@@ -609,6 +862,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
       var changed = 0, changedFields = [];
       if (preExec){
+        if ((preExec.side||"") !== (exec && exec.side||"")){ changed=1; changedFields.push("side"); }
         if ((preExec.ordType||"") !== (exec && exec.ordType||"")){ changed=1; changedFields.push("ordType"); }
         if (String(preExec.ordPx||"") !== String((exec && exec.ordPx)||"")){ changed=1; changedFields.push("ordPx"); }
         if (String(preExec.qty||"") !== String((exec && exec.qty)||"")){ changed=1; changedFields.push("qty"); }
@@ -617,6 +871,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       // core ED
       Qualtrics.SurveyEngine.setEmbeddedData("rt_ms", rt);
       Qualtrics.SurveyEngine.setEmbeddedData("hint_shown", hinted ? "1" : "0");
+      Qualtrics.SurveyEngine.setEmbeddedData("exec_side", exec && exec.side);
       Qualtrics.SurveyEngine.setEmbeddedData("exec_ordType", exec && exec.ordType);
       Qualtrics.SurveyEngine.setEmbeddedData("exec_ordPx", exec && exec.ordPx);
       Qualtrics.SurveyEngine.setEmbeddedData("exec_qty", exec && exec.qty);
@@ -633,6 +888,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       Qualtrics.SurveyEngine.setEmbeddedData("balance", balance0);
 
       // analytics ED
+      Qualtrics.SurveyEngine.setEmbeddedData("pre_side", preExec && preExec.side);
       Qualtrics.SurveyEngine.setEmbeddedData("pre_ordType", preExec && preExec.ordType);
       Qualtrics.SurveyEngine.setEmbeddedData("pre_ordPx", preExec && preExec.ordPx);
       Qualtrics.SurveyEngine.setEmbeddedData("pre_qty", preExec && preExec.qty);
@@ -659,10 +915,10 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         Qualtrics.SurveyEngine.setEmbeddedData("rolling_pos_px",  (posAvg0!=null && isFinite(posAvg0)) ? posAvg0.toFixed(6) : "");
       }
 
-      // NEW: fees & realized P/L EDs (per trade + session rollups)
+      // fees & realized P/L EDs (per trade + session rollups)
       Qualtrics.SurveyEngine.setEmbeddedData("fees_trade", (feesTrade||0).toFixed(2));
       Qualtrics.SurveyEngine.setEmbeddedData("fees_session", (rollingFees||0).toFixed(2));
-      Qualtrics.SurveyEngine.setEmbeddedData("realized_pl_trade", (realizedTrade||0).toFixed(2));
+      Qualtrics.SurveyEngine.setEmbeddedData("realized_pl_trade", (realizedThisScenario||0).toFixed(2));
       Qualtrics.SurveyEngine.setEmbeddedData("realized_pl_session", (rollingRealized||0).toFixed(2));
 
       // persist session totals for next page
@@ -675,7 +931,9 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   function autoSubmit(reason){ submitAndAdvance(reason); }
 
   function deriveBias(exec, fv, target, herd){
-    var px = (exec && exec.ordType==="Market") ? (scenario.ask || lastPx()) : ((exec && exec.ordPx==null) ? (scenario.ask || lastPx()) : (exec ? exec.ordPx : (scenario.ask || lastPx())));
+    var px = (exec && exec.ordType==="Market")
+      ? (exec && exec.side==="Sell" ? (scenario.bid || lastPx()) : (scenario.ask || lastPx()))
+      : ((exec && exec.ordPx==null) ? (exec && exec.side==="Sell" ? (scenario.bid || lastPx()) : (scenario.ask || lastPx())) : (exec ? exec.ordPx : (scenario.ask || lastPx())));
     if(!isNum(px)) px = lastPx();
     var fvSrc = isNum(fv) ? fv : toNum(scenario.fair_value);
     var fvDist = isNum(fvSrc) ? (px - fvSrc) : 0;
