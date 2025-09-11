@@ -1418,6 +1418,8 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         'bias_herd_suscept',
         metrics.herd_suscept.toFixed(4)
       );
+      Qualtrics.SurveyEngine.setEmbeddedData('bias_focus_active', metrics.focus_active);
+      Qualtrics.SurveyEngine.setEmbeddedData('herding_threshold_pct', metrics.herd_thr_pct);
       Qualtrics.SurveyEngine.setEmbeddedData(
         'ev_hold',
         evHold(lastPx(), scenario.p_up, scenario.up_ret, scenario.down_ret).toFixed(6)
@@ -1597,40 +1599,54 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   }
 
 function deriveBias(exec, fv, target, herd) {
+  // Entry price used for “bias” checks
   var px =
     exec && exec.ordType === 'Market'
-      ? exec && exec.side === 'Sell'
-        ? scenario.bid || lastPx()
-        : scenario.ask || lastPx()
-      : exec && exec.ordPx == null
-      ? exec && exec.side === 'Sell'
-        ? scenario.bid || lastPx()
-        : scenario.ask || lastPx()
-      : exec
-      ? exec.ordPx
-      : scenario.ask || lastPx();
+      ? (exec && exec.side) === 'Sell'
+        ? (isNum(scenario.bid) ? scenario.bid : lastPx())
+        : (isNum(scenario.ask) ? scenario.ask : lastPx())
+      : (exec && exec.ordPx != null)
+        ? exec.ordPx
+        : (exec && exec.side) === 'Sell'
+          ? (isNum(scenario.bid) ? scenario.bid : lastPx())
+          : (isNum(scenario.ask) ? scenario.ask : lastPx());
 
   if (!isNum(px)) px = lastPx();
 
   var fvSrc = isNum(fv) ? fv : toNum(scenario.fair_value);
-  var fvDist = isNum(fvSrc) ? px - fvSrc : 0;
+  var fvDist = isNum(fvSrc) ? (px - fvSrc) : 0;
+
+  var halfSpread = (isNum(scenario.ask) && isNum(scenario.bid) && scenario.ask > scenario.bid)
+    ? (scenario.ask - scenario.bid) / 2
+    : 0.05; // fallback
+
+  // Configurable herding threshold (ED override → default 70)
+  var herdThrRaw = ED('herding_threshold_pct');
+  var herdThr = isNum(toNum(herdThrRaw)) ? toNum(herdThrRaw) : 70;
+
+  // Optional gating via bias_focus (comma list e.g. "anchor,fv,herd,hot")
+  var focusRaw = (ED('bias_focus') || '').toLowerCase().replace(/\s+/g, '');
+  var focusSet = focusRaw ? focusRaw.split(',') : ['anchor','fv','herd','hot'];
+
+  function wants(k){ return focusSet.indexOf(k) !== -1; }
+
   var anchorDist = !isNum(target) ? 0 : Math.abs(px - target);
-  var herdSus = herd >= 70 && exec && exec.qty > 0 ? 1 : 0;
-  var isBiased =
-    fvDist >
-      (isNum(scenario.ask) && isNum(scenario.bid)
-        ? (scenario.ask - scenario.bid) / 2
-        : 0.05) ||
-    herdSus === 1;
+  var herdSus = (wants('herd') && isNum(herd) && herd >= herdThr && exec && exec.qty > 0) ? 1 : 0;
+
+  // Symmetric FV test (ABS distance)
+  var fvFlag = wants('fv') ? (Math.abs(fvDist) > halfSpread) : false;
+
+  var isBiased = fvFlag || herdSus === 1; // (anchor is tracked but not flipping the flag by itself here)
 
   return {
     is_biased: !!isBiased,
     fv_dist: fvDist || 0,
     anchor_dist: anchorDist || 0,
-    herd_suscept: herdSus || 0
+    herd_suscept: herdSus || 0,
+    herd_thr_pct: herdThr,
+    focus_active: focusSet.join(',') // for diagnostics/ED echo
   };
 }
-
 
 
   function evHold(price, pUp, up, down) {
