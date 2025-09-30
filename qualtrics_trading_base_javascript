@@ -87,8 +87,15 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       var WANT_LOG = '${e://Field/debug_edlog}';
       var ENABLED = WANT_LOG !== '0'; // default ON even if ED not set
       var orig = Qualtrics.SurveyEngine.setEmbeddedData;
+      var inLogging = false; // Guard against infinite recursion
 
       Qualtrics.SurveyEngine.setEmbeddedData = function (k, v) {
+        if (inLogging) {
+          return orig.apply(this, arguments);
+        }
+        
+        inLogging = true;
+        try {
         window._ed = window._ed || {};
         window._ed[k] = v;
         if (ENABLED) {
@@ -97,6 +104,9 @@ Qualtrics.SurveyEngine.addOnReady(function () {
           } catch (e) {}
         }
         return orig.apply(this, arguments);
+        } finally {
+          inLogging = false;
+        }
       };
     } catch (e) {}
   })();
@@ -285,6 +295,377 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   })();
   // ===== /Phase 4 Rollups =====
 
+  // === AI Nudge: config & helpers ===
+  var AI_NUDGE_ENDPOINT = ED('ai_nudge_endpoint') || 'https://YOUR_API_HOST/nudge'; // TODO: set real URL
+  console.log('AI_NUDGE_ENDPOINT DEBUG: raw ED value:', ED('ai_nudge_endpoint'), 'final:', AI_NUDGE_ENDPOINT);
+      var AI_NUDGE_TIMEOUT_MS = (function(){
+        var raw = ED('ai_nudge_timeout_ms'); 
+        var n = toNum(raw); 
+        console.log('AI_NUDGE_TIMEOUT_MS: raw ED value:', raw, 'parsed:', n, 'final:', 10000); // Force 10000ms for GPT
+        return 10000;  // Force 10000ms timeout for GPT responses
+      })();
+
+  // Read comprehensive participant profile from ED
+  function readProfileSignals() {
+    // Be permissive with ED names so we don't 404 on missing keys.
+    var screener =
+      ED('prolific_screener_json') || ED('prolific_json') || ED('screener_json') || '';
+    var cctScore =
+      toNum(ED('cct_score')) != null ? toNum(ED('cct_score')) :
+      toNum(ED('cct_total')) != null ? toNum(ED('cct_total')) :
+      toNum(ED('CCT_total_points')) != null ? toNum(ED('CCT_total_points')) :
+      null;
+    var cctBucket = ED('cct_bucket') || '';
+    
+    // CCT Hot/Cold scores
+    var cctHotScore = toNum(ED('CCT_hot_score')) || null;
+    var cctColdScore = toNum(ED('CCT_cold_score')) || null;
+    var cctHotColdDiff = null;
+    if (cctHotScore != null && cctColdScore != null) {
+      cctHotColdDiff = cctHotScore - cctColdScore;
+    }
+
+    // Try to parse screener JSON if it looks like JSON
+    try {
+      if (typeof screener === 'string' && screener.trim().charAt(0) === '{') {
+        screener = JSON.parse(screener);
+      }
+    } catch (_) { /* leave as-is */ }
+
+    return { 
+      // Legacy fields
+      screener: screener, 
+      cct_score: cctScore, 
+      cct_bucket: cctBucket,
+      cct_hot_score: cctHotScore,
+      cct_cold_score: cctColdScore,
+      cct_hot_cold_diff: cctHotColdDiff,
+      
+      // Essential Demographics
+      demographics: {
+        age: toNum(ED('age')),
+        gender: ED('gender'),
+        education: ED('education'),
+        personal_income: toNum(ED('personal_income')),
+        employment: ED('employment')
+      },
+      
+      // Key Experience & Confidence
+      experience: {
+        trading_years: ED('trading_experience'),
+        confidence: toNum(ED('confidence')),
+        financial_education: ED('financial_education'),
+        investment_types: ED('investment_types'),
+        market_knowledge: ED('market_knowledge')
+      },
+      
+      // Critical Psychological Traits (Moderators)
+      psychological_traits: {
+        regret_avoidance: toNum(ED('regret_avoidance')),
+        pre_mood: ED('pre_mood'),
+        pre_decision_fatigue: ED('pre_decision_fatigue')
+      },
+      
+      // Post-Survey Reflection (Mediators/Outcomes)
+      post_survey: {
+        satisfaction: ED('post_satisfaction'),
+        confidence: ED('post_confidence'),
+        bias_awareness: ED('post_bias_awareness'),
+        learning_perception: ED('post_learning_perception'),
+        ai_helpfulness: ED('Post_AI_helpfulness')
+      },
+      
+      // Key Behavioral Biases (Nudge Targets) - Placeholder for future questions
+      behavioral_biases: {
+        herding: toNum(ED('herding_tendency')) || null,
+        anchoring: toNum(ED('anchoring_susceptibility')) || null,
+        fomo: toNum(ED('fomo')) || null
+      },
+      
+      // CCT Risk Measures (Primary)
+      cct: {
+        total_score: cctScore,
+        hot_score: cctHotScore,
+        cold_score: cctColdScore,
+        hot_cold_diff: cctHotColdDiff,
+        bucket: cctBucket
+      }
+    };
+  }
+
+  // Build payload (basic or enhanced based on feature flag)
+  function buildGenericNudgePayload(execObj) {
+    console.log('BUILD GENERIC PAYLOAD: Starting to build generic nudge payload');
+    
+    // Generic payload (scenario data only, no personalization)
+    var genericPayload = {
+      // Session context
+      session_id: ED('SESSION_ID'),
+      scenario_id: ED('scenario_id'),
+      scenario_seq: ED('scenario_seq'),
+      scenario_ts_ms: toNum(ED('scenario_ts_ms')),
+      
+      // Treatment group
+      treatment_group: (ED('treatment_group') || '').toLowerCase(),
+      
+      // Scenario context (essentials only)
+      sym: ED('symbol'),
+      last: toNum(jQuery('#last').text()) || toNum(ED('last')),
+      bid: toNum(jQuery('#bid').text()) || toNum(ED('bid')),
+      ask: toNum(jQuery('#ask').text()) || toNum(ED('ask')),
+      fair_value: toNum(ED('fair_value')),
+      anchor_target: toNum(ED('anchor_target')),
+      sentiment_pct: toNum(ED('sentiment_pct')),
+      allowed_sides: ED('allowed_sides'),
+      allow_shorting: ED('allow_shorting'),
+      commission_bps: toNum(ED('commission_bps')),
+      slippage_bps: toNum(ED('slippage_bps')),
+      hot_condition: ED('hot_condition'),
+      
+      // Current order
+      exec: {
+        side: execObj && execObj.side,
+        ordType: execObj && execObj.ordType,
+        ordPx: execObj && execObj.ordPx,
+        qty: execObj && execObj.qty,
+        fillPx_preview: execObj && execObj.fillPx
+      }
+      
+      // NO profile data - this is the key difference
+    };
+    
+    console.log('BUILD GENERIC PAYLOAD: Generic payload built successfully:', genericPayload);
+    return genericPayload;
+  }
+
+  function buildNudgePayload(execObj) {
+    console.log('BUILD PAYLOAD: Starting to build nudge payload');
+    var prof = readProfileSignals();
+    var useEnhancedPayload = (ED('ai_nudge_payload_type') || 'basic').toLowerCase() === 'enhanced';
+    console.log('BUILD PAYLOAD: useEnhancedPayload:', useEnhancedPayload);
+    
+    // Base payload (always included)
+    var basePayload = {
+      // who/when
+      session_id: ED('SESSION_ID'),
+      scenario_id: ED('scenario_id'),
+      scenario_seq: ED('scenario_seq'),
+      scenario_ts_ms: toNum(ED('scenario_ts_ms')),
+
+      // treatment
+      treatment_group: (ED('treatment_group') || '').toLowerCase(),
+
+      // scenario context (just the essentials)
+      sym: ED('symbol'),
+      last: toNum(jQuery('#last').text()) || toNum(ED('last')),
+      bid: toNum(jQuery('#bid').text()) || toNum(ED('bid')),
+      ask: toNum(jQuery('#ask').text()) || toNum(ED('ask')),
+      fair_value: toNum(ED('fair_value')),
+      anchor_target: toNum(ED('anchor_target')),
+      sentiment_pct: toNum(ED('sentiment_pct')),
+      allowed_sides: ED('allowed_sides'),
+      allow_shorting: ED('allow_shorting'),
+      commission_bps: toNum(ED('commission_bps')),
+      slippage_bps: toNum(ED('slippage_bps')),
+      hot_condition: ED('hot_condition'),
+
+      // order preview
+      exec: {
+        side: execObj && execObj.side,
+        ordType: execObj && execObj.ordType,
+        ordPx: execObj && execObj.ordPx,
+        qty: execObj && execObj.qty,
+        fillPx_preview: execObj && execObj.fillPx
+      },
+
+      // participant profile
+      profile: prof
+    };
+    
+    // Enhanced payload (only if feature flag is enabled)
+    if (useEnhancedPayload) {
+      try {
+        console.log('BUILD PAYLOAD: Building enhanced payload');
+        // Get current portfolio values from the global scope or calculate them
+        var currentBalance = toNum(ED('balance')) || 100000;
+        var currentPosQty = toNum(ED('pos_qty')) || 0;
+        var currentPosPx = toNum(ED('pos_px')) || 0;
+        var currentUnrealizedPL = 0; // Calculate if needed
+        var currentRealizedPL = ssGetNum(ACC.REALIZED, 0);
+        var currentMaxDrawdown = ssGetNum(ACC.MAX_DD, 0);
+        var currentMaxDrawdownPct = ssGetNum(ACC.MAX_DD_PCT, 0);
+        var currentPeakBalance = ssGetNum(ACC.HWM, 0);
+        console.log('BUILD PAYLOAD: Portfolio values - balance:', currentBalance, 'posQty:', currentPosQty, 'realizedPL:', currentRealizedPL);
+        
+        basePayload.portfolio = {
+          balance: currentBalance,
+          posQty: currentPosQty,
+          posPx: currentPosPx,
+          unrealizedPL: currentUnrealizedPL,
+          realizedPL: currentRealizedPL,
+          maxDrawdown: currentMaxDrawdown,
+          maxDrawdownPct: currentMaxDrawdownPct,
+          totalReturn: (currentRealizedPL + currentUnrealizedPL) / currentBalance,
+          tradeCount: ssGetNum(ACC.N_SCEN, 0),
+          peakBalance: currentPeakBalance,
+          currentDrawdown: currentPeakBalance - (currentBalance + currentUnrealizedPL),
+          currentDrawdownPct: currentPeakBalance > 0 ? ((currentPeakBalance - (currentBalance + currentUnrealizedPL)) / currentPeakBalance) * 100 : 0
+        };
+        
+        // Add scenario context for enhanced payload
+        basePayload.scenario = {
+          name: ED('scenario_name'),
+          session_tag: ED('session_tag'),
+          news_head: ED('news_head'),
+          bias_focus: ED('bias_focus'),
+          timer_sec: toNum(ED('timer_sec'))
+        };
+        
+        // Add trading history context
+        basePayload.trading_context = {
+          scenario_start_balance: toNum(ED('balance')) || 100000,
+          scenario_start_position: toNum(ED('pos_qty')) || 0,
+          scenario_start_price: toNum(ED('pos_px')) || null,
+          previous_trades_count: ssGetNum(ACC.N_SCEN, 0),
+          previous_realized_pl: ssGetNum(ACC.REALIZED, 0)
+        };
+        console.log('BUILD PAYLOAD: Enhanced payload built successfully');
+      } catch (error) {
+        console.log('BUILD PAYLOAD: Error building enhanced payload:', error);
+        // Fall back to basic payload
+        useEnhancedPayload = false;
+      }
+    }
+    
+    console.log('BUILD PAYLOAD: Payload built successfully:', basePayload);
+    return basePayload;
+  }
+
+  // POST with AbortController + soft fail
+  function postJSON(url, data, timeoutMs, done) {
+    console.log('POST JSON: Starting POST request to:', url);
+    try {
+      var ctrl = new AbortController();
+      var actualTimeout = Math.max(200, timeoutMs||5000);
+      var t = setTimeout(function(){ 
+        console.log('POST: Timeout reached, aborting request after', actualTimeout, 'ms');
+        try{ctrl.abort();}catch(_){ } 
+      }, actualTimeout);
+      var t0 = Date.now();
+
+      console.log('POST: Making request to', url, 'timeout:', timeoutMs, 'ms', 'actualTimeout:', actualTimeout);
+      fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data),
+        signal: ctrl.signal
+      })
+      .then(function(res){
+        return res.ok ? res.json() : Promise.reject({status:res.status});
+      })
+      .then(function(json){
+        clearTimeout(t);
+        try {
+          Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_ok','1');
+          Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_latency_ms', String(Date.now()-t0));
+          if (json && json.model) Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_model', String(json.model));
+        } catch(_){}
+        done && done(null, json);
+      })
+          .catch(function(err){
+            clearTimeout(t);
+            try {
+              var elapsed = Date.now() - t0;
+              console.log('POST: Error after', elapsed, 'ms:', err.message, 'err.name:', err.name, 'err.code:', err.code);
+              console.log('POST: Full error object:', err);
+              Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_ok','0');
+              Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_err', (err && (err.status||err.message)) ? String(err.status||err.message) : 'error');
+              Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_err_details', JSON.stringify({
+                name: err.name,
+                message: err.message,
+                code: err.code,
+                elapsed: elapsed
+              }));
+            } catch(_){}
+            done && done(err);
+          });
+    } catch (e) {
+      try {
+        Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_ok','0');
+        Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_err','throw');
+      } catch(_){}
+      done && done(e);
+    }
+  }
+
+  // Append AI message under existing #hint content
+  function appendAiNudge(htmlFrag) {
+    try {
+      var $hint = jQuery('#hint');
+      if (!$hint.length) return;
+      var $wrap = jQuery('<div class="ai-nudge-chunk" style="margin-top:6px;padding-top:6px;border-top:1px dashed #e5e7eb;font-size:.83rem;color:#374151;"></div>');
+      $wrap.html(htmlFrag);
+      
+      // Add instruction statement after AI nudge
+      var $instruction = jQuery('<div style="margin-top:8px;padding:8px;background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:.85rem;color:#475569;text-align:center;"><strong>You may adjust your order or confirm and continue (above)</strong></div>');
+      
+      $hint.append($wrap).append($instruction).show();
+    } catch(_){}
+  }
+
+  // Escape plain text -> HTML-safe
+  function escapeHtml(s){
+    return String(s).replace(/[<>&"']/g, function(c){
+      return c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '&' ? '&amp;' : c === '"' ? '&quot;' : '&#39;';
+    });
+  }
+
+  // Very small allow-list sanitizer for AI HTML
+  function sanitizeAiHtml(html){
+    try {
+      var temp = document.createElement('div');
+      temp.innerHTML = html;
+
+      var ALLOWED_TAGS = { DIV:1, P:1, B:1, STRONG:1, I:1, EM:1, UL:1, OL:1, LI:1, SPAN:1, BR:1, SMALL:1, CODE:1 };
+      var ALLOWED_ATTR = { 'class':1, 'style':1 };
+
+      (function walk(node){
+        var children = Array.prototype.slice.call(node.childNodes||[]);
+        children.forEach(function(ch){
+          if (ch.nodeType === 1){ // element
+            if (!ALLOWED_TAGS[ch.tagName]) {
+              // unwrap: move children up and remove node
+              while (ch.firstChild) node.insertBefore(ch.firstChild, ch);
+              node.removeChild(ch);
+              return;
+            }
+            // strip attributes except allow-list; strip event handlers & urls
+            var toRemove = [];
+            for (var i=0;i<ch.attributes.length;i++){
+              var a = ch.attributes[i];
+              var name = (a.name||'').toLowerCase();
+              var val = (a.value||'');
+              if (!ALLOWED_ATTR[name]) { toRemove.push(a.name); continue; }
+              if (/^on/i.test(name)) { toRemove.push(a.name); continue; }
+              if (/(url|expression)\s*\(/i.test(val)) { toRemove.push(a.name); continue; }
+            }
+            toRemove.forEach(function(n){ ch.removeAttribute(n); });
+          } else if (ch.nodeType === 3) {
+            // text ok
+          } else {
+            node.removeChild(ch);
+            return;
+          }
+          walk(ch);
+        });
+      })(temp);
+
+      return temp.innerHTML;
+    } catch(e){
+      return escapeHtml(String(html||''));
+    }
+  }
+
   // ===== header-loop guard (if a header row slipped into L&M) =====
   (function () {
     var sidMaybe = ED('scenario_id');
@@ -368,6 +749,66 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var rollingRealized = toNum(ED('rolling_realized_pl'));
   if (rollingRealized == null || !isFinite(rollingRealized)) rollingRealized = 0;
 
+  // Utility function for formatting signed numbers
+  function fmtSigned(n) {
+    return (n >= 0 ? '+' : '') + (isFinite(n) ? Number(n).toFixed(2) : '0.00');
+  }
+
+  // Function to update session metrics in the main panel
+  function updateSessionMetrics() {
+    try {
+      jQuery('#realizedPL').text(fmtSigned(rollingRealized || 0));
+      jQuery('#sessionFees').text(isFinite(rollingFees) ? Number(rollingFees).toFixed(2) : '0.00');
+    } catch (e) {
+      // Silently handle any errors
+    }
+  }
+
+  // Function to update trading costs information
+  function updateTradingCosts() {
+    try {
+      var commTxt = fmtBps(scenario.commission_bps);
+      var slipTxt = fmtBps(scenario.slippage_bps);
+      var sprTxt = spreadStats();
+      
+      var costsText = 'Commission ' + commTxt + '. ' +
+                     'Slippage ' + slipTxt + ' (applied to execution price: + for Buy, - for Sell). ' +
+                     'Current spread ' + sprTxt + '.';
+      
+      jQuery('.costs-details').text(costsText);
+    } catch (e) {
+      // Silently handle any errors
+    }
+  }
+
+  // Helper function for formatting basis points
+  function fmtBps(b) {
+    return b == null || isNaN(b) ? '—' : Number(b).toFixed(0) + ' bps (' + (Number(b) / 100).toFixed(2) + '%)';
+  }
+
+  // Helper function for spread statistics
+  function spreadStats() {
+    var bid = toNum(jQuery('#bid').text());
+    var ask = toNum(jQuery('#ask').text());
+    if (!isNum(bid) || !isNum(ask) || ask <= 0 || bid <= 0 || ask <= bid) return '—';
+    var spr = ask - bid;
+    var mid = (ask + bid) / 2;
+    var sprBps = (spr / mid) * 10000;
+    return '$' + spr.toFixed(2) + ' (' + sprBps.toFixed(0) + ' bps)';
+  }
+
+  // Set up the refresh function for external calls
+  window._sessMetricsRefresh = updateSessionMetrics;
+  
+  // Initial updates
+  updateSessionMetrics();
+  updateTradingCosts();
+  
+  // Set up periodic updates for costs (spread changes)
+  var costsUpdateInterval = setInterval(function() {
+    updateTradingCosts();
+  }, Math.max(1200, scenario.tick_ms || 1200));
+
   // derive starting balance & position
   var balance0 =
     CARRY && rollingBal != null
@@ -434,8 +875,9 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   togglePx();
   jQuery('#ordType').on('change', togglePx);
 
-  // ===== Costs footnote — aligned, muted, resilient =====
-  (function feeFootnote_v3() {
+  // ===== Costs footnote — DISABLED (now integrated into main panel) =====
+  (function feeFootnote_v3_DISABLED() {
+    return; // Disabled - costs now shown in main panel
     // 0) Clean up any earlier attempts
     ['feeBox', 'orderFeeRow', 'feePillCSS', 'feeLabelsCSS', 'feeFootCSS', 'feeFootnote'].forEach(function (id) {
       var el = document.getElementById(id);
@@ -525,8 +967,9 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }, Math.max(1200, scenario.tick_ms || 1200));
   })();
 
-  // ===== Session metrics strip (Realized P/L & Fees) =====
-  (function sessionMetricsStrip_v1() {
+  // ===== Session metrics strip — DISABLED (now integrated into main panel) =====
+  (function sessionMetricsStrip_v1_DISABLED() {
+    return; // Disabled - session metrics now shown in main panel
     var $q = jQuery('#' + q.questionId);
     if (!$q.length) return;
 
@@ -596,8 +1039,46 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   } catch (e) {
     prices = [];
   }
-  if (!prices.length) {
-    prices = [scenario.last || 62.1];
+  
+  // Generate realistic price data if we don't have enough or if it looks unrealistic
+  function generateRealisticPrices(basePrice, count = 20) {
+    var generated = [basePrice];
+    var current = basePrice;
+    var volatility = 0.02; // 2% volatility
+    
+    for (var i = 1; i < count; i++) {
+      // Random walk with slight mean reversion
+      var change = (Math.random() - 0.5) * volatility * current;
+      var meanReversion = (basePrice - current) * 0.1; // Slight pull back to base
+      current += change + meanReversion;
+      
+      // Ensure price stays positive and reasonable
+      current = Math.max(current, basePrice * 0.95);
+      current = Math.min(current, basePrice * 1.05);
+      
+      generated.push(Number(current.toFixed(2)));
+    }
+    
+    return generated;
+  }
+  
+  if (!prices.length || prices.length < 5) {
+    var basePrice = scenario.last || 62.1;
+    prices = generateRealisticPrices(basePrice, 20);
+  }
+  
+  // Validate that prices look reasonable (not too volatile)
+  if (prices.length > 1) {
+    var minPrice = Math.min.apply(null, prices);
+    var maxPrice = Math.max.apply(null, prices);
+    var basePrice = prices[0];
+    var volatility = (maxPrice - minPrice) / basePrice;
+    
+    // If volatility is too high (>10%), regenerate with more conservative parameters
+    if (volatility > 0.1) {
+      var basePrice = scenario.last || 62.1;
+      prices = generateRealisticPrices(basePrice, prices.length);
+    }
   }
 
   (function initChart() {
@@ -623,43 +1104,194 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // scale for HiDPI
 
-    var pad = 8,
-      i = 1;
+    var pad = 8;
 
-    function draw(n) {
+    function drawCompleteChart() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      var slice = prices.slice(0, Math.max(2, n));
-      var minP = Math.min.apply(null, slice);
-      var maxP = Math.max.apply(null, slice);
+      if (prices.length < 2) return;
+
+      var minP = Math.min.apply(null, prices);
+      var maxP = Math.max.apply(null, prices);
       var range = maxP - minP || 0.000001;
 
-      // baseline
+      // Add some padding to the range for better visualization
+      var padding = range * 0.1;
+      minP -= padding;
+      maxP += padding;
+      range = maxP - minP;
+
+      // Draw grid lines and Y-axis labels
+      ctx.strokeStyle = '#f3f4f6';
       ctx.lineWidth = 1;
-      ctx.strokeStyle = '#e5e7eb';
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '10px Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      
+      var gridLines = 5;
+      for (var i = 0; i <= gridLines; i++) {
+        var y = pad + (i * (cssH - 2 * pad)) / gridLines;
+        
+        // Draw grid line
       ctx.beginPath();
-      ctx.moveTo(pad, cssH - pad);
-      ctx.lineTo(Math.max(320, cssW) - pad, cssH - pad);
+        ctx.moveTo(pad, y);
+        ctx.lineTo(Math.max(320, cssW) - pad, y);
       ctx.stroke();
 
-      // line
+        // Draw Y-axis price label
+        var price = maxP - (i * (maxP - minP) / gridLines);
+        ctx.fillText(price.toFixed(2), pad - 8, y);
+      }
+
+      // Draw price line
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#111827';
       ctx.beginPath();
-      for (var k = 0; k < slice.length; k++) {
-        var x = pad + (k * (Math.max(320, cssW) - 2 * pad)) / (slice.length - 1);
-        var y = pad + (cssH - 2 * pad) * (1 - (slice[k] - minP) / range);
+      for (var k = 0; k < prices.length; k++) {
+        var x = pad + (k * (Math.max(320, cssW) - 2 * pad)) / (prices.length - 1);
+        var y = pad + (cssH - 2 * pad) * (1 - (prices[k] - minP) / range);
         if (k === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
 
-      var lastShown = slice[slice.length - 1];
-      window._lastShown = lastShown; // expose current price
+      // Draw price points
+      ctx.fillStyle = '#111827';
+      for (var k = 0; k < prices.length; k++) {
+        var x = pad + (k * (Math.max(320, cssW) - 2 * pad)) / (prices.length - 1);
+        var y = pad + (cssH - 2 * pad) * (1 - (prices[k] - minP) / range);
+        ctx.beginPath();
+        ctx.arc(x, y, 2, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+
+      // Add price labels at key points (start, middle, end, and significant highs/lows)
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '11px Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      
+      // Find significant points for labeling
+      var labelPoints = [];
+      
+      // Always label start and end (but offset them slightly to avoid edge cutoff)
+      if (prices.length > 1) {
+        var startOffset = Math.min(2, Math.floor(prices.length / 10)); // Offset by 2 points or 10% of data
+        var endOffset = Math.min(2, Math.floor(prices.length / 10));
+        
+        labelPoints.push({ 
+          index: startOffset, 
+          price: prices[startOffset], 
+          label: 'Start',
+          isEdge: true 
+        });
+        labelPoints.push({ 
+          index: prices.length - 1 - endOffset, 
+          price: prices[prices.length - 1 - endOffset], 
+          label: 'Now',
+          isEdge: true 
+        });
+      }
+      
+      // Find significant highs and lows (if we have enough data points)
+      if (prices.length > 10) {
+        var step = Math.max(1, Math.floor(prices.length / 8)); // Show ~8 labels max
+        
+        for (var i = step; i < prices.length - 1; i += step) {
+          var isSignificant = false;
+          var currentPrice = prices[i];
+          
+          // Check if this is a local high or low
+          var prevPrice = prices[i - 1];
+          var nextPrice = prices[i + 1];
+          
+          if ((currentPrice > prevPrice && currentPrice > nextPrice) || 
+              (currentPrice < prevPrice && currentPrice < nextPrice)) {
+            isSignificant = true;
+          }
+          
+          // Also label some intermediate points for context
+          if (i % (step * 2) === 0) {
+            isSignificant = true;
+          }
+          
+          if (isSignificant) {
+            labelPoints.push({ 
+              index: i, 
+              price: currentPrice, 
+              label: currentPrice.toFixed(2) 
+            });
+          }
+        }
+      }
+      
+      // Draw labels
+      for (var i = 0; i < labelPoints.length; i++) {
+        var point = labelPoints[i];
+        var x = pad + (point.index * (Math.max(320, cssW) - 2 * pad)) / (prices.length - 1);
+        var y = pad + (cssH - 2 * pad) * (1 - (point.price - minP) / range);
+        
+        // Draw label background
+        var textWidth = ctx.measureText(point.label).width;
+        var labelPadding = 4;
+        var labelHeight = 16;
+        
+        // Calculate label position with boundary checks
+        var labelX = x;
+        var labelY = y - labelHeight - 2;
+        
+        // Ensure labels stay within chart boundaries
+        var minX = pad + labelPadding;
+        var maxX = Math.max(320, cssW) - pad - labelPadding;
+        var minY = pad + labelPadding;
+        var maxY = cssH - pad - labelPadding;
+        
+        // Adjust X position if label would be cut off
+        if (x - textWidth/2 - labelPadding < minX) {
+          labelX = minX + textWidth/2 + labelPadding;
+        } else if (x + textWidth/2 + labelPadding > maxX) {
+          labelX = maxX - textWidth/2 - labelPadding;
+        }
+        
+        // Adjust Y position if label would be cut off
+        if (labelY < minY) {
+          labelY = y + 20; // Position below the point instead
+        } else if (labelY + labelHeight > maxY) {
+          labelY = y - 20; // Position above the point instead
+        }
+        
+        // Draw label background
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.fillRect(
+          labelX - textWidth/2 - labelPadding, 
+          labelY, 
+          textWidth + labelPadding * 2, 
+          labelHeight
+        );
+        
+        // Draw label border
+        ctx.strokeStyle = '#e5e7eb';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(
+          labelX - textWidth/2 - labelPadding, 
+          labelY, 
+          textWidth + labelPadding * 2, 
+          labelHeight
+        );
+        
+        // Draw label text
+        ctx.fillStyle = '#374151';
+        ctx.fillText(point.label, labelX, labelY + 12);
+      }
+
+      // Update current price display
+      var lastShown = prices[prices.length - 1];
+      window._lastShown = lastShown;
       jQuery('#last').text(numPretty(lastShown));
       jQuery('#lastPillTxt').text(numPretty(lastShown));
 
-      // live unrealized P/L
+      // Update unrealized P/L
       var unrl = posAvg0 != null && posQty0 > 0 ? (lastShown - posAvg0) * posQty0 : null;
       jQuery('#unrl, #unrl_bottom').text(unrl == null ? '—' : signedFmt(unrl, 2));
 
@@ -676,19 +1308,11 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       }
     }
 
-    draw(i);
-    var step = Math.max(120, scenario.tick_ms || 450);
-    var chartTimer = setInterval(function () {
-      i++;
-      if (i > prices.length) {
-        clearInterval(chartTimer);
-        return;
-      }
-      draw(i);
-    }, step);
+    // Draw the complete chart immediately
+    drawCompleteChart();
 
     // expose for debugging
-    window._chart = { ctx: ctx, prices: prices, step: step };
+    window._chart = { ctx: ctx, prices: prices, draw: drawCompleteChart };
   })();
 
   // ===== timer (hot) — disabled by default in Preview =====
@@ -706,6 +1330,17 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     !DEBUG_NO_TIMERS &&
     (!inPreview || FORCE_TIMERS)
   );
+  
+  // Debug timer settings
+  console.log('TIMER DEBUG:', {
+    hot_condition: scenario.hot_condition,
+    timer_sec: scenario.timer_sec,
+    DEBUG_NO_TIMERS: DEBUG_NO_TIMERS,
+    inPreview: inPreview,
+    FORCE_TIMERS: FORCE_TIMERS,
+    timersEnabled: timersEnabled
+  });
+  console.log('TIMER VALUES:', 'hot_condition =', scenario.hot_condition, 'timer_sec =', scenario.timer_sec, 'timersEnabled =', timersEnabled);
 
   if (timersEnabled) {
     var t = scenario.timer_sec;
@@ -952,18 +1587,84 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     }
   }
 
-  // treatment flag (unchanged)
+  // treatment flag (control vs nudge)
   function cleanAlpha(v) {
     return (v == null ? '' : String(v)).toLowerCase().replace(/[^a-z]/g, '');
   }
-
-  var ED_TREAT = ED('treatment_group');
-  var FORCE_NUDGE = /[?&]nudge=1(&|$)/.test(location.search) || ED('debug_force_nudge') === '1';
-  var TREAT = cleanAlpha(ED_TREAT) === 'nudge' || FORCE_NUDGE;
+  // Read treatment_group from Randomizer (for production) or Global ED (for testing)
+  // Use setTimeout to ensure Randomizer has executed first
+  var treatmentGroupValue = '';
+  var forceNudge = /[?&]nudge=1(&|$)/.test(location.search) || ED('debug_force_nudge') === '1';
+  var shouldShowNudge = false;
+  
+  var retryCount = 0;
+  var maxRetries = 5; // Stop after 1 second (5 * 200ms) - much faster for preview mode
+  
+  // TEMPORARY: Force nudge for testing in preview mode
+  var forceNudgeForTesting = true; // Set to false when done testing
+  
+  function checkTreatmentGroup() {
+    treatmentGroupValue = ED('treatment_group') || ED('treatment') || ED('group') || '';
+    console.log('TREATMENT: Checking treatment_group:', treatmentGroupValue, '(attempt', retryCount + 1, 'of', maxRetries + 1, ')');
+    
+    if (treatmentGroupValue && treatmentGroupValue.trim() !== '') {
+      shouldShowNudge = cleanAlpha(treatmentGroupValue) === 'nudge' || forceNudge;
+      console.log('TREATMENT: Successfully read from Randomizer:', treatmentGroupValue, 'shouldShowNudge:', shouldShowNudge);
+      return; // Stop retrying
+    } else if (retryCount < maxRetries) {
+      retryCount++;
+      // Try again after a short delay
+      setTimeout(checkTreatmentGroup, 200);
+    } else {
+      console.log('TREATMENT: Max retries reached, treatment_group still empty. Defaulting to control group.');
+      shouldShowNudge = forceNudge || forceNudgeForTesting; // Show nudge if forced OR for testing
+      if (forceNudgeForTesting) {
+        console.log('TREATMENT: TESTING MODE - Forcing nudge to appear');
+      }
+    }
+  }
+  
+  // Start checking after a delay to let Randomizer execute
+  setTimeout(checkTreatmentGroup, 500);
 
   try {
-    console.log('TREATMENT →', { ed: ED_TREAT, force: FORCE_NUDGE, treat: TREAT });
+    Qualtrics.SurveyEngine.setEmbeddedData('treatment_guard',
+      shouldShowNudge ? 'nudge' : 'control');
+    console.log('TREATMENT →', { 
+      treatmentGroupValue: treatmentGroupValue, 
+      rawFromED: ED('treatment_group'),
+      forceNudge: forceNudge, 
+      shouldShowNudge: shouldShowNudge,
+      cleanAlphaResult: cleanAlpha(treatmentGroupValue)
+    });
   } catch (e) {}
+
+  // Debug: Log all available ED fields to see what's actually set
+  try {
+    console.log('DEBUG: Available ED fields:');
+    var allFields = ['treatment_group', 'treatment', 'group', 'ai_nudge_enabled', 'ai_nudge_endpoint', 'commission_bps', 'slippage_bps', 'allowed_sides'];
+    allFields.forEach(function(field) {
+      var value = ED(field);
+      console.log('  ' + field + ':', value);
+    });
+    
+    // Debug: Try different ways to read treatment_group
+    console.log('DEBUG: treatment_group reading methods:');
+    console.log('  ED("treatment_group"):', ED('treatment_group'));
+    console.log('  Qualtrics.SurveyEngine.getEmbeddedData("treatment_group"):', Qualtrics.SurveyEngine.getEmbeddedData('treatment_group'));
+    console.log('  window._ed.treatment_group:', window._ed && window._ed.treatment_group);
+    
+    // Debug: Check if it's a timing issue
+    setTimeout(function() {
+      console.log('DEBUG: treatment_group after 1 second:', ED('treatment_group'));
+    }, 1000);
+  } catch(e) {}
+
+  // Set default ED values for AI nudge tracking
+  try {
+    if (!ED('ai_nudge_dismissed')) Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_dismissed','0');
+    if (!ED('adjust_after_ai')) Qualtrics.SurveyEngine.setEmbeddedData('adjust_after_ai','0');
+  } catch(_){}
 
   // Place
   jQuery('#place').on('click', function (e) {
@@ -972,6 +1673,13 @@ Qualtrics.SurveyEngine.addOnReady(function () {
     if (pending) {
       // Adjust
       editCount++;
+      // Mark edit after AI if AI has already been shown
+      try {
+        var shown = toNum(ED('ai_nudge_shown_ms'));
+        if (isNum(shown) && shown > 0) {
+          Qualtrics.SurveyEngine.setEmbeddedData('adjust_after_ai','1');
+        }
+      } catch(_){}
       pending = false;
       hinted = false;
       exec = null;
@@ -998,13 +1706,42 @@ Qualtrics.SurveyEngine.addOnReady(function () {
       var useSL = 0,
         useTP = 0; // risk controls disabled in this phase
 
-      if (!qty || qty < 1) {
-        alert('Enter a valid quantity.');
+      if (qty < 0) {
+        alert('Quantity cannot be negative.');
+        return;
+      }
+      
+      // Allow 0 quantity (user can adjust without placing order)
+      if (qty === 0) {
+        alert('Please enter a quantity greater than 0 to place an order, or adjust your order above.');
         return;
       }
       if (ordType !== 'Market' && isNaN(ordPx)) {
         alert('Enter a valid price for Limit/Stop.');
         return;
+      }
+      
+      // Get current balance and position
+      var currentBalance = parseFloat(jQuery('#balanceTxt_bottom').text().replace(/[,$]/g, '')) || 0;
+      var currentPosition = parseInt(jQuery('#posQty_bottom').text()) || 0;
+      
+      // Check balance for buy orders
+      if (SIDE === 'Buy') {
+        var price = ordType === 'Market' ? parseFloat(scenario.last) : ordPx;
+        var totalCost = qty * price;
+        if (totalCost > currentBalance) {
+          var maxShares = Math.floor(currentBalance / price);
+          alert('Insufficient balance. You can buy a maximum of ' + maxShares + ' shares with your current balance of $' + currentBalance.toLocaleString() + '.');
+          return;
+        }
+      }
+      
+      // Check position for sell orders
+      if (SIDE === 'Sell') {
+        if (qty > currentPosition) {
+          alert('Insufficient position. You can only sell ' + currentPosition + ' shares (you currently hold ' + currentPosition + ' shares).');
+          return;
+        }
       }
 
       if (SIDE === 'Sell' && !allowShortingFlag) {
@@ -1097,8 +1834,94 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         rt_to_place_ms = Date.now() - t0;
       }
 
-      if (TREAT) {
-        hinted = true;
+      // === AI Nudge: fire on first Place (non-blocking), only for nudge group ===
+      try {
+        var AI_ENABLED = (ED('ai_nudge_enabled') || '1') !== '0';
+        console.log('AI_ENABLED DEBUG: raw ED value:', ED('ai_nudge_enabled'), 'parsed:', AI_ENABLED);
+        Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_req_ms', String(Date.now()));
+        Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_used', '0'); // flips to 1 if we render
+        Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_shown_ms', '');
+
+        // create a tiny pending row under #hint while waiting
+        (function ensurePending(){
+          var $hint = jQuery('#hint');
+          console.log('AI SPINNER: Looking for #hint element:', $hint.length);
+          if (!$hint.length) {
+            console.log('AI SPINNER: #hint element not found!');
+            return;
+          }
+          var el = document.getElementById('aiNudgePending');
+          if (!el) {
+            console.log('AI SPINNER: Creating spinner element');
+            el = document.createElement('div');
+            el.id = 'aiNudgePending';
+            el.style.cssText = 'margin-top:12px;padding:12px;border:2px solid #3b82f6;border-radius:8px;background:linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);font-size:.9rem;color:#1e40af;font-weight:600;text-align:center;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);';
+            el.innerHTML = '🤖 AI is analyzing your trade… <span style="animation: pulse 1.5s infinite;font-size:1.2em;">⏳</span>';
+            
+            // Add CSS for pulse animation if not already present
+            if (!document.getElementById('pulse-css')) {
+              var style = document.createElement('style');
+              style.id = 'pulse-css';
+              style.textContent = '@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }';
+              document.head.appendChild(style);
+            }
+            $hint.append(el).show();
+            console.log('AI SPINNER: Spinner created and shown');
+          } else {
+            console.log('AI SPINNER: Spinner already exists');
+          }
+        })();
+
+        // Check treatment group again at the time of nudge request
+        var currentTreatmentGroup = ED('treatment_group') || ED('treatment') || ED('group') || '';
+        var currentShouldShowNudge = (cleanAlpha(currentTreatmentGroup) === 'generic_nudge' || cleanAlpha(currentTreatmentGroup) === 'nudge') || forceNudge || forceNudgeForTesting;
+        var currentAIEndpoint = ED('ai_nudge_endpoint') || 'https://YOUR_API_HOST/nudge';
+        console.log('NUDGE CHECK: treatment_group:', currentTreatmentGroup, 'shouldShowNudge:', currentShouldShowNudge, 'forceNudgeForTesting:', forceNudgeForTesting);
+        console.log('AI CHECK: AI_ENABLED:', AI_ENABLED, 'AI_NUDGE_ENDPOINT:', AI_NUDGE_ENDPOINT, 'currentAIEndpoint:', currentAIEndpoint);
+        console.log('AI CHECK: AI_ENABLED type:', typeof AI_ENABLED, 'AI_NUDGE_ENDPOINT type:', typeof AI_NUDGE_ENDPOINT);
+        console.log('AI CHECK: AI_ENABLED truthy:', !!AI_ENABLED, 'AI_NUDGE_ENDPOINT truthy:', !!AI_NUDGE_ENDPOINT, 'currentAIEndpoint truthy:', !!currentAIEndpoint);
+        
+        console.log('CONDITION CHECK: currentShouldShowNudge:', currentShouldShowNudge, 'AI_ENABLED:', AI_ENABLED, 'currentAIEndpoint:', currentAIEndpoint, 'endpoint check:', currentAIEndpoint !== 'https://YOUR_API_HOST/nudge');
+        console.log('CONDITION RESULT:', currentShouldShowNudge && AI_ENABLED && currentAIEndpoint && currentAIEndpoint !== 'https://YOUR_API_HOST/nudge');
+        
+        // 3-Arm RCT Logic
+        if (currentShouldShowNudge) {
+          console.log('AI NUDGE: ENTERING IF BLOCK - All conditions met!');
+          
+          var currentTreatmentGroup = ED('treatment_group') || '';
+          var payload;
+          var aiEndpoint;
+          
+          if (currentTreatmentGroup === 'generic_nudge') {
+            console.log('AI NUDGE: Using generic nudge payload');
+            payload = buildGenericNudgePayload(exec);
+            aiEndpoint = currentAIEndpoint.replace('/nudge', '/generic-nudge');
+          } else if (currentTreatmentGroup === 'nudge') {
+            console.log('AI NUDGE: Using enhanced nudge payload');
+            payload = buildNudgePayload(exec);
+            aiEndpoint = currentAIEndpoint.replace('/nudge', '/enhanced-nudge');
+          } else if (currentTreatmentGroup === '') {
+            // Fallback for testing when treatment_group is not set
+            console.log('AI NUDGE: Treatment group empty, using enhanced nudge as fallback for testing');
+            payload = buildNudgePayload(exec);
+            aiEndpoint = currentAIEndpoint.replace('/nudge', '/enhanced-nudge');
+          } else {
+            console.log('AI NUDGE: Unknown treatment group:', currentTreatmentGroup);
+            return;
+          }
+          
+          console.log('AI NUDGE: Sending request to', aiEndpoint);
+          console.log('AI NUDGE: Payload:', payload);
+          console.log('AI NUDGE: Payload size:', JSON.stringify(payload).length, 'bytes');
+          console.log('AI NUDGE: Timeout value:', AI_NUDGE_TIMEOUT_MS);
+
+          postJSON(aiEndpoint, payload, AI_NUDGE_TIMEOUT_MS, function(err, json){
+            console.log('AI NUDGE: Response received', { err: err, json: json });
+            console.log('AI NUDGE: Error details:', err ? { name: err.name, message: err.message, code: err.code } : 'none');
+            // remove pending row either way
+            var p = document.getElementById('aiNudgePending'); if (p && p.parentNode) p.parentNode.removeChild(p);
+            if (err || !json) {
+              // AI failed - show Quick check as fallback
         renderNudge(
           exec,
           jQuery('#fv').val(),
@@ -1106,9 +1929,79 @@ Qualtrics.SurveyEngine.addOnReady(function () {
           scenario.sentiment_pct,
           scenario.hot_condition
         );
+              // Show confirm button for fallback
         jQuery('#confirm').show();
+              return; // fail soft
+            }
+
+            // Expect shape: { suggestion_html?, suggestion_text?, model?, meta? }
+            var html = '';
+            if (json.suggestion_html && typeof json.suggestion_html === 'string') {
+              html = sanitizeAiHtml(json.suggestion_html); // allow-list sanitize
+            } else if (json.suggestion_text && typeof json.suggestion_text === 'string') {
+              html = '<div>'+ escapeHtml(json.suggestion_text) +'</div>';
+            }
+
+            // hard length cap (defensive)
+            if (html && html.length > 3000) {
+              html = escapeHtml(html.slice(0, 3000)) + '…';
+              try { Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_truncated','1'); } catch(_){}
+            } else {
+              try { Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_truncated','0'); } catch(_){}
+            }
+
+            if (html) {
+              appendAiNudge(html);
+              try {
+                Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_used','1');
+                Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_shown_ms', String(Date.now()));
+                Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_resp_len', String(html.length));
+              } catch(_){}
+              
+              // Show confirm button now that AI response is displayed
+              jQuery('#confirm').show();
+
+              // Add dismiss button
+              try {
+                var hint = document.getElementById('hint');
+                if (hint) {
+                  var btn = document.createElement('a');
+                  btn.href = '#';
+                  btn.textContent = 'Dismiss';
+                  btn.style.cssText = 'margin-left:8px;font-size:.75rem;color:#6b7280;text-decoration:underline;';
+                  btn.onclick = function(ev){
+                    ev.preventDefault();
+                    var chunks = hint.querySelectorAll('.ai-nudge-chunk');
+                    chunks.forEach(function(n){ n.style.display = 'none'; });
+                    try { Qualtrics.SurveyEngine.setEmbeddedData('ai_nudge_dismissed','1'); } catch(_){}
+                  };
+                  var lastChunk = hint.querySelector('.ai-nudge-chunk');
+                  if (lastChunk) lastChunk.appendChild(btn);
+                }
+              } catch(_){}
+            }
+          });
+        } else {
+          // not firing: remove pending indicator
+          console.log('AI NUDGE: Not firing - shouldShowNudge:', currentShouldShowNudge, 'AI_ENABLED:', AI_ENABLED, 'currentAIEndpoint:', currentAIEndpoint);
+          var p2 = document.getElementById('aiNudgePending'); if (p2 && p2.parentNode) p2.parentNode.removeChild(p2);
+        }
+      } catch(_e) {}
+
+      // Check treatment group again at the time of nudge display
+      var currentTreatmentGroup = ED('treatment_group') || ED('treatment') || ED('group') || '';
+      var currentShouldShowNudge = cleanAlpha(currentTreatmentGroup) === 'nudge' || forceNudge || forceNudgeForTesting;
+      
+      if (currentShouldShowNudge) {
+        hinted = true;
+        // Don't show Quick check here - AI nudge will handle it
+        // renderNudge will only be called as fallback if AI fails
+        // Don't show confirm button yet - wait for AI response
+        jQuery('#confirm').hide();
         jQuery('#place').text('Adjust Order').removeClass('btn-primary').addClass('btn-ghost');
+        // Don't show any hint yet - wait for AI response
       } else {
+        // For control group, show confirm button immediately
         jQuery('#confirm').show();
       }
 
@@ -1452,6 +2345,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
         isNum(postDist) ? postDist.toFixed(4) : ''
       );
       Qualtrics.SurveyEngine.setEmbeddedData('changed_after_nudge', String(changed));
+      Qualtrics.SurveyEngine.setEmbeddedData('adjust_after_ai', ED('adjust_after_ai') || '0');
       Qualtrics.SurveyEngine.setEmbeddedData('changed_fields', changedFields.join(','));
       Qualtrics.SurveyEngine.setEmbeddedData('adjust_count', String(editCount));
       Qualtrics.SurveyEngine.setEmbeddedData(
