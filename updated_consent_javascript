@@ -1,0 +1,23 @@
+Qualtrics.SurveyEngine.addOnload(function() {
+    // Add event listeners to radio buttons to capture selection
+    const yesRadio = document.querySelector('input[name="consent"][value="yes"]');
+    const noRadio = document.querySelector('input[name="consent"][value="no"]');
+    
+    if (yesRadio) {
+        yesRadio.addEventListener('change', function() {
+            // Store consent data when "Yes" is selected
+            Qualtrics.SurveyEngine.setEmbeddedData('consent_given', 'yes');
+            Qualtrics.SurveyEngine.setEmbeddedData('consent_timestamp', new Date().toISOString());
+            Qualtrics.SurveyEngine.setEmbeddedData('survey_status', 'consent_given');
+        });
+    }
+    
+    if (noRadio) {
+        noRadio.addEventListener('change', function() {
+            // Store non-consent data when "No" is selected
+            Qualtrics.SurveyEngine.setEmbeddedData('consent_given', 'no');
+            Qualtrics.SurveyEngine.setEmbeddedData('consent_timestamp', new Date().toISOString());
+            Qualtrics.SurveyEngine.setEmbeddedData('survey_status', 'completed_no_consent');
+        });
+    }
+});
