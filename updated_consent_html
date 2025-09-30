@@ -1,0 +1,129 @@
+<div class="consent-container" style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif; line-height: 1.6;">
+
+<h2 style="color: #2c3e50; text-align: center; margin-bottom: 30px;">Consent to Participate in Research</h2>
+
+<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">Study Title:</h3>
+<p><strong>AI-Powered Behavioral Nudges in Financial Decision-Making: A Randomized Controlled Trial</strong></p>
+
+<h3 style="color: #2c3e50;">Researcher:</h3>
+<p><strong>Principal Researcher:</strong> Sharat Potukuchi<br>
+<strong>Programme:</strong> Executive MSc in Behavioural Science, LSE<br>
+<strong>Email:</strong> s.p.potukuchi@lse.ac.uk<br>
+<strong>Supervisor:</strong> Dr Dario Krpan<br>
+<strong>Supervisor Email:</strong> D.Krpan@lse.ac.uk</p>
+
+<h3 style="color: #2c3e50;">What this study involves:</h3>
+<ul>
+<li>Complete questionnaires about your background and trading experience (1 minute)</li>
+<li>Take a risk assessment test called the Columbia Card Task (3 minutes)</li>
+<li>Participate in a trading simulation with 12 scenarios (10-15 minutes)</li>
+<li>Answer final questions about your experience (1 minute)</li>
+<li><strong>Total time: 15-20 minutes</strong></li>
+</ul>
+
+<h3 style="color: #2c3e50;">Compensation:</h3>
+<p>You will receive <strong>$3-5 (USD)</strong> for your participation, paid through Prolific within 24-48 hours.</p>
+</div>
+
+<div style="background-color: #e8f4f8; padding: 15px; border-left: 4px solid #3498db; margin-bottom: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">Important Information:</h3>
+<ul>
+<li><strong>Voluntary:</strong> You can withdraw at any time without penalty</li>
+<li><strong>Anonymous:</strong> Your data will be anonymized and kept confidential</li>
+<li><strong>AI Use:</strong> Some participants receive AI nudges; others don't (randomly assigned)</li>
+<li><strong>No Real Money:</strong> This is a simulation with no financial risk</li>
+<li><strong>Compensation:</strong> You'll receive $3-5 (USD) if you complete at least 80% of the study</li>
+</ul>
+</div>
+
+<div style="background-color: #f0f8f0; padding: 15px; border-left: 4px solid #27ae60; margin-bottom: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">What is this study about?</h3>
+<p>This research investigates whether artificial intelligence (AI) can help people make better financial decisions by providing behavioral nudges. We want to understand if AI-powered suggestions can help reduce common thinking biases when making trading decisions.</p>
+<p><strong>Why is this important?</strong> Many people struggle with biases when making financial decisions, such as following the crowd or being overly influenced by recent information. This research could help develop better tools to support financial decision-making.</p>
+</div>
+
+<div style="background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin-bottom: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">Risks and Benefits:</h3>
+<p><strong>Risks:</strong> Minimal risk - this is a computer simulation with no real money involved. You may feel some mild stress from making trading decisions, especially under time pressure. Some participants may find AI suggestions confusing or intrusive (you can ignore them).</p>
+<p><strong>Benefits:</strong> You'll receive $3-5 (USD) compensation, gain insights into your own decision-making patterns, contribute to important research, and experience AI-powered tools that may be useful for future financial decisions.</p>
+</div>
+
+<div style="background-color: #f8d7da; padding: 15px; border-left: 4px solid #dc3545; margin-bottom: 20px;">
+<h3 style="color: #2c3e50; margin-top: 0;">Data Protection:</h3>
+<p><strong>Your data will be:</strong></p>
+<ul>
+<li>Anonymized immediately - no names or identifying information stored</li>
+<li>Stored securely on LSE's encrypted servers</li>
+<li>Accessed only by the research team</li>
+<li>Kept for 7 years, then securely deleted</li>
+<li>Used for academic publications and future research (with your consent)</li>
+<li>Processed using AI tools for analysis (no personal identifiers shared)</li>
+</ul>
+</div>
+
+<div style="background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin-bottom: 30px;">
+<h3 style="color: #2c3e50; margin-top: 0;">Data Use and AI Processing:</h3>
+<p>Your anonymized data may be processed using AI tools for analysis. No personal identifiers will be shared with AI systems. You can withdraw consent for AI processing at any time.</p>
+</div>
+
+<div style="text-align: center; margin-bottom: 30px;">
+<h3 style="color: #2c3e50;">Do you consent to participate in this study?</h3>
+</div>
+
+<div style="max-width: 600px; margin: 0 auto;">
+<div style="margin-bottom: 20px;">
+<label style="display: flex; align-items: center; cursor: pointer; font-size: 18px; padding: 15px 20px; border: 2px solid #27ae60; border-radius: 8px; background-color: #f8f9fa; transition: all 0.3s ease; margin-bottom: 10px;">
+<input type="radio" name="consent" value="yes" required style="margin-right: 15px; width: 20px; height: 20px; accent-color: #27ae60;">
+<span style="color: #27ae60; font-weight: bold;">YES - I consent to participate in this study</span>
+</label>
+
+<label style="display: flex; align-items: center; cursor: pointer; font-size: 18px; padding: 15px 20px; border: 2px solid #e74c3c; border-radius: 8px; background-color: #f8f9fa; transition: all 0.3s ease;">
+<input type="radio" name="consent" value="no" required style="margin-right: 15px; width: 20px; height: 20px; accent-color: #e74c3c;">
+<span style="color: #e74c3c; font-weight: bold;">NO - I do not consent to participate in this study</span>
+</label>
+</div>
+</div>
+
+<style>
+/* Additional CSS to ensure radio buttons are visible */
+input[type="radio"] {
+    -webkit-appearance: radio !important;
+    appearance: radio !important;
+    width: 20px !important;
+    height: 20px !important;
+    margin-right: 15px !important;
+}
+
+label:hover {
+    background-color: #e9ecef !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+input[type="radio"]:checked + span {
+    text-decoration: underline;
+}
+
+label:has(input[type="radio"]:checked) {
+    background-color: #e8f5e8 !important;
+    border-color: #27ae60 !important;
+    box-shadow: 0 0 0 3px rgba(39, 174, 96, 0.1);
+}
+
+label:has(input[type="radio"][value="no"]:checked) {
+    background-color: #fdeaea !important;
+    border-color: #e74c3c !important;
+    box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.1);
+}
+</style>
+
+<div style="text-align: center; font-size: 14px; color: #7f8c8d;">
+<p><strong>Contact Information:</strong><br>
+Principal Researcher: Sharat Potukuchi - s.p.potukuchi@lse.ac.uk<br>
+Supervisor: Dr Dario Krpan - D.Krpan@lse.ac.uk<br>
+LSE Ethics Team: research.ethics@lse.ac.uk | +44 (0)20 7955 7129</p>
+<p><a href="https://info.lse.ac.uk/staff/services/Policies-and-procedures/Assets/Documents/datProRes.pdf" target="_blank" style="color: #3498db;">LSE Research Privacy Policy</a></p>
+</div>
+
+</div>
