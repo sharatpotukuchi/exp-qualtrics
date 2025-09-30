@@ -1,5 +1,4 @@
-<style>
-  :root{
+<style type="text/css">:root{
     --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --bg:#fff; --chip:#f3f4f6;
   }
   .term-wrap{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:920px;margin:0 auto;padding:14px}
@@ -33,13 +32,11 @@
   .last-pill{background:#111827;color:#fff;border-radius:999px;padding:6px 10px;font-size:12px;font-variant:tabular-nums}
   .plotwrap{
     position:relative;border:1px solid var(--line);border-radius:12px;padding:8px;
-    /* grid only in the plot area */
     background-image:
       repeating-linear-gradient(to right,#f3f4f6 0,#f3f4f6 1px,transparent 1px,transparent 80px),
       repeating-linear-gradient(to bottom,#f3f4f6 0,#f3f4f6 1px,transparent 1px,transparent 40px);
   }
   #px{display:block;width:100%;height:180px;border-radius:8px}
-  .plotwrap #pxOverlay{position:absolute;left:8px;right:8px;top:8px;bottom:28px;pointer-events:none}
   .chart-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
 
   /* Sentiment */
@@ -65,6 +62,15 @@
   .ordergrid label{font-size:12px;color:#374151}
   .ordergrid input,.ordergrid select{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:10px;font-size:14px;background:#fff}
 
+  .panel-header{margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .panel-header h3{margin:0;font-size:18px;font-weight:600;color:var(--text)}
+  
+  .instructions-box{display:flex;align-items:center;gap:16px;padding:16px;margin:16px 0;background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);border:1px solid #0ea5e9;border-radius:12px;box-shadow:0 2px 4px rgba(14,165,233,0.1)}
+  .instructions-icon{font-size:24px;flex-shrink:0}
+  .instructions-content{flex:1}
+  .instructions-title{font-weight:600;font-size:16px;color:#0c4a6e;margin:0 0 4px 0}
+  .instructions-text{font-size:14px;color:#075985;margin:0;line-height:1.4}
+  
   .risk-box{display:flex;gap:24px;flex-wrap:wrap;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fcfcfc;font-size:13px}
   .risk-box label{display:inline-flex;align-items:center;gap:8px}
   .risk-box input[type="checkbox"]{
@@ -76,16 +82,41 @@
   .btn{appearance:none;border:0;border-radius:12px;padding:12px 18px;font-weight:700;cursor:pointer}
   .btn-primary{background:#111827;color:#fff}
   .btn-ghost{background:#f3f4f6;color:#111827}
-  .footerline{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
-  .hint{display:none;margin-top:8px;padding:10px;border:1px dashed #d1d5db;border-radius:8px;background:#fafafa}
-
-  /* Bottom account summary */
-  .acct-summary{display:flex;gap:20px;flex-wrap:wrap;align-items:center;justify-content:flex-end;border-top:1px dashed var(--line);padding-top:12px;margin-top:6px;color:var(--muted);font-size:13px}
+  .order-actions{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+  .acct-summary{display:flex;gap:20px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:13px}
   .acct-summary b{color:var(--ink);font-variant:tabular-nums}
+  .action-buttons{display:flex;gap:12px;align-items:center}
+  
+  .trading-costs{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+  .costs-section{margin-bottom:12px}
+  .costs-title{font-weight:600;font-size:14px;color:var(--text);margin-bottom:6px}
+  .costs-details{font-size:12px;color:var(--muted);line-height:1.4}
+  .session-summary{display:flex;gap:24px;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:12px;background:#f8f9fa;border-radius:8px;border:1px solid #e9ecef}
+  .session-item{display:flex;align-items:center;gap:8px;font-size:13px}
+  .session-label{color:var(--muted);font-weight:500}
+  .session-value{color:var(--ink);font-weight:600;font-variant:tabular-nums}
+  
+  .hint{display:none;margin-top:8px;padding:10px;border:1px dashed #d1d5db;border-radius:8px;background:#fafafa}
 </style>
 
 <div class="term-wrap">
+
   
+  <span id="lmCarrier" style="display:none"
+    data-f1="${lm://Field/1}"  data-f2="${lm://Field/2}"  data-f3="${lm://Field/3}"
+    data-f4="${lm://Field/4}"  data-f5="${lm://Field/5}"  data-f6="${lm://Field/6}"
+    data-f7="${lm://Field/7}"  data-f8="${lm://Field/8}"  data-f9="${lm://Field/9}"
+    data-f10="${lm://Field/10}" data-f11="${lm://Field/11}" data-f12="${lm://Field/12}"
+    data-f13="${lm://Field/13}" data-f14="${lm://Field/14}" data-f15="${lm://Field/15}"
+    data-f16="${lm://Field/16}" data-f17="${lm://Field/17}" data-f18="${lm://Field/18}"
+    data-f19="${lm://Field/19}" data-f20="${lm://Field/20}" data-f21="${lm://Field/21}"
+    data-f22="${lm://Field/22}" data-f23="${lm://Field/23}" data-f24="${lm://Field/24}"
+    data-f25="${lm://Field/25}" data-f26="${lm://Field/26}" data-f27="${lm://Field/27}"
+    data-f28="${lm://Field/28}" data-f29="${lm://Field/29}" data-f30="${lm://Field/30}"
+    data-f31="${lm://Field/31}" data-f32="${lm://Field/32}" data-f33="${lm://Field/33}"
+    data-f34="${lm://Field/34}" data-f35="${lm://Field/35}" data-f36="${lm://Field/36}">
+  </span>
+
   <div class="topbar">
     <div class="ticker">
       <span id="sym">ALFA</span> <span class="chip" id="sessionTag">Regular</span>
@@ -101,11 +132,10 @@
   </div>
 
   
-  <div class="panel scenario" aria-label="Scenario intro">
-    <h3>Scenario 1</h3>
-    <p>It’s <b><span id="scenarioNowTxt">9:28 a.m.</span></b> (pre-open). You’re starting the day with <b>$100,000</b> and no open positions. Your focus name is <b>ALFA</b>, a large-cap “AI hardware &amp; edge compute” stock. Overnight, a top broker released a bullish note.</p>
-    
-    <span id="scenarioNowRaw" style="display:none">9:28</span>
+  <div aria-label="Scenario intro" class="panel scenario">
+    <h3 id="scenarioName">Scenario</h3>
+    <p id="narrative">Loading…</p>
+    <span id="scenarioNowRaw" style="display:none"></span>
   </div>
 
   
@@ -117,7 +147,6 @@
       </div>
       <div class="plotwrap">
         <canvas id="px" width="740" height="180"></canvas>
-        <canvas id="pxOverlay"></canvas>
       </div>
     </div>
     <div class="chart-meta">
@@ -137,42 +166,44 @@
   </div>
 
   
-  <div class="panel" aria-label="Market news">
+  <div aria-label="Market news" class="panel">
     <div class="news">
-      <img id="newsImg" alt="">
+      <img id="newsImg" alt="" />
       <div>
-        <div id="newsHead" style="font-weight:700;font-size:16px;">TopBroker raises ALFA target to $75; cites outsized AI demand</div>
-        <div id="newsBody" class="note" style="margin-top:4px;">Pre-open indications show strong interest. Options imply a ±10% 1-day move. Retail sentiment appears elevated.</div>
+        <div id="newsHead" style="font-weight:700;font-size:16px;">&nbsp;</div>
+        <div id="newsBody" class="note" style="margin-top:4px;">&nbsp;</div>
       </div>
     </div>
   </div>
 
   
-  <div class="panel" aria-label="Reference prices">
+  <div aria-label="Reference prices" class="panel">
     <div class="refs">
       <div>
         <div class="subhead">Analyst Price Target</div>
         <div class="readonly">
-          <span class="pill">Target: <span id="targetTxt">75.0</span></span>
+          <span class="pill">Target: <span id="targetTxt">--</span></span>
           <span class="note">Source: TopBroker</span>
         </div>
-        <input id="target" type="hidden" value="75.0">
+        <input id="target" type="hidden" />
       </div>
       <div>
         <div class="subhead">Model Fair Value</div>
         <div class="readonly">
-          <span class="pill">Fair Value: <span id="fvTxt">61.90</span></span>
+          <span class="pill">Fair Value: <span id="fvTxt">--</span></span>
           <span class="note">Source: internal model</span>
         </div>
-        <input id="fv" type="hidden" value="61.90">
+        <input id="fv" type="hidden" />
       </div>
     </div>
   </div>
 
   
-  <div class="panel" aria-label="Order entry">
+  <div aria-label="Order entry" class="panel">
+    <div class="panel-header">
+      <h3>Place Order</h3>
+    </div>
     <div class="ordergrid">
-      
       <div class="rowline-3">
         <div>
           <label for="ordType">Order Type</label>
@@ -182,38 +213,73 @@
         </div>
         <div>
           <label for="ordPx">Limit/Stop Price</label>
-          <input id="ordPx" type="number" step="0.01" placeholder="e.g., 62.10">
+          <input id="ordPx" type="number" step="0.01" placeholder="e.g., 62.10" />
         </div>
         <div>
           <label for="qty">Quantity</label>
-          <input id="qty" type="number" step="1" min="1" value="200">
+          <input id="qty" type="number" step="1" min="1" value="200" />
         </div>
       </div>
 
       
-      <div>
+      <div class="instructions-box">
+        <div class="instructions-icon">📈</div>
+        <div class="instructions-content">
+          <div class="instructions-title">Ready to Trade?</div>
+          <div class="instructions-text">
+            Use the fields above to place your trade. Select your order type, set quantity, and click "Review Order" to proceed.
+          </div>
+        </div>
+      </div>
+
+      
+      <div style="display: none !important;">
         <label>Risk Controls</label>
         <div class="risk-box">
-          <label><input type="checkbox" id="sl"> Stop Loss (approx. −10%)</label>
-          <label><input type="checkbox" id="tp"> Take Profit (approx. +20%)</label>
+          <label><input id="sl" type="checkbox" /> Stop Loss (approx. &minus;10%)</label>
+          <label><input id="tp" type="checkbox" /> Take Profit (approx. +20%)</label>
         </div>
-        <div class="note" style="margin-top:6px">These levels auto-close the position when reached. You may change them on the next screen.</div>
+        <div class="note" style="margin-top:6px">
+          These levels auto-close the position when reached. You may change them on the next screen.
+        </div>
       </div>
-    </div>
 
-    
-    <div class="acct-summary">
-      <div>Balance: <b>$<span id="balanceTxt_bottom">100,000</span></b></div>
-      <div>Position: <b><span id="posQty_bottom">0</span></b></div>
-      <div>P/L: <b id="unrl_bottom">—</b></div>
-    </div>
-
-    <div class="footerline">
-      <div>
-        <button id="place" class="btn btn-primary">Review Order</button>
-        <button id="confirm" class="btn btn-ghost" style="display:none">Confirm & Continue</button>
+      
+      <div class="order-actions">
+        <div class="acct-summary">
+          <div>Balance: <b>$<span id="balanceTxt_bottom">100,000</span></b></div>
+          <div>Position: <b><span id="posQty_bottom">0</span></b></div>
+          <div>P/L: <b id="unrl_bottom">—</b></div>
+        </div>
+        
+        <div class="action-buttons">
+          <button class="btn btn-primary" id="place">Review Order</button>
+          <button class="btn btn-ghost" id="confirm" style="display:none">Confirm &amp; Continue</button>
+        </div>
       </div>
-      <div id="hint" class="hint"></div>
+
+      
+      <div class="trading-costs">
+        <div class="costs-section">
+          <div class="costs-title">Trading Costs</div>
+          <div class="costs-details">
+            Commission 1 bps (0.01%). Slippage 2 bps (0.02%) (applied to execution price: + for Buy, - for Sell). Current spread $0.40 (65 bps).
+          </div>
+        </div>
+        
+        <div class="session-summary">
+          <div class="session-item">
+            <span class="session-label">Realized P/L (session):</span>
+            <span class="session-value" id="realizedPL">+0.00</span>
+          </div>
+          <div class="session-item">
+            <span class="session-label">Fees (session):</span>
+            <span class="session-value" id="sessionFees">0.00</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hint" id="hint">&nbsp;</div>
     </div>
   </div>
 </div>
@@ -274,116 +340,4 @@
   })();
 })();
 
-/* === Candle + axes overlay (driven by #last) === */
-(function(){
-  var overlay=document.getElementById('pxOverlay');
-  if(!overlay) return;
-
-  function sizeOverlay(){
-    var plotwrap=overlay.parentElement; // .plotwrap
-    var r=plotwrap.getBoundingClientRect();
-    overlay.width=Math.max(10,Math.floor(r.width-16));   // left+right padding (8px each)
-    overlay.height=Math.max(10,Math.floor(r.height-36)); // top 8 + bottom area for x labels
-  }
-  sizeOverlay(); window.addEventListener('resize', sizeOverlay);
-
-  var ctx=overlay.getContext('2d');
-  var candleMs=2000, maxCandles=60, series=[], cur=null, curStart=0;
-
-  function pushPrice(p){
-    var now=Date.now();
-    if(!cur||now-curStart>=candleMs){
-      if(cur){ series.push(cur); if(series.length>maxCandles) series.shift(); }
-      curStart=now; cur={t:now,o:p,h:p,l:p,c:p};
-    }else{
-      if(p>cur.h) cur.h=p;
-      if(p<cur.l) cur.l=p;
-      cur.c=p;
-    }
-    draw();
-  }
-
-  // Observe #last for ticks
-  (function(){
-    var src=document.getElementById('last');
-    if(!src) return;
-    var init=parseFloat((src.textContent||'').replace(/[^0-9.\-]/g,''));
-    if(!isNaN(init)) pushPrice(init);
-    new MutationObserver(()=>{
-      var v=parseFloat((src.textContent||'').replace(/[^0-9.\-]/g,''));
-      if(!isNaN(v)) pushPrice(v);
-    }).observe(src,{characterData:true,subtree:true,childList:true});
-  })();
-
-  setInterval(function(){ if(cur) draw(); }, 400);
-
-  function draw(){
-    var W=overlay.width,H=overlay.height;if(!W||!H)return;
-    ctx.clearRect(0,0,W,H);
-
-    var axisW=52,padR=6,x0=axisW,x1=W-padR,plotW=x1-x0;
-    var y0=6,y1=H-6-12,plotH=y1-y0; // reserve ~12px for x-axis labels
-
-    // paint the Y-axis gutter to hide the base line that runs under it
-    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,x0-1,H);
-
-    var data=series.slice(); if(cur)data.push(cur); if(!data.length)return;
-
-    // y-range
-    var lo=Infinity,hi=-Infinity;
-    for(const k of data){ if(k.l<lo)lo=k.l; if(k.h>hi)hi=k.h; }
-    if(!(isFinite(lo)&&isFinite(hi)))return;
-    if(hi===lo){hi+=0.5;lo-=0.5;}
-    var pad=(hi-lo)*0.08; lo-=pad; hi+=pad;
-    const yFor=v=> y0+(hi-v)*(plotH/(hi-lo));
-
-    // x-scale (right-aligned)
-    var n=data.length,cw=Math.max(3,Math.floor(plotW/Math.max(30,n*1.2)));
-    var gap=Math.max(1,Math.floor(cw*0.4));
-    var totalW=n*(cw+gap)-gap,xStart=x1-totalW;
-
-    // candles
-    ctx.lineWidth=1;
-    for(let i=0;i<n;i++){
-      const k=data[i],x=xStart+i*(cw+gap);
-      const yo=yFor(k.o),yc=yFor(k.c),yh=yFor(k.h),yl=yFor(k.l);
-      const up=k.c>=k.o;
-      ctx.strokeStyle=up?'#059669':'#dc2626';
-      ctx.fillStyle=up?'rgba(5,150,105,0.18)':'rgba(220,38,38,0.18)';
-      ctx.beginPath();ctx.moveTo(x+Math.floor(cw/2),yh);ctx.lineTo(x+Math.floor(cw/2),yl);ctx.stroke();
-      const top=Math.min(yo,yc),h=Math.max(2,Math.abs(yc-yo));
-      ctx.fillRect(x,top,cw,h);ctx.strokeRect(x,top,cw,h);
-    }
-
-    // Y-axis grid + labels (start at x0 so they don't cross the gutter)
-    ctx.fillStyle='#6b7280';ctx.strokeStyle='#e5e7eb';
-    ctx.font='11px Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif';
-    ctx.textAlign='right';ctx.textBaseline='middle';
-    const ticksY=5;
-    for(let i=0;i<ticksY;i++){
-      const frac=i/(ticksY-1),v=hi-frac*(hi-lo),y=y0+frac*plotH;
-      ctx.beginPath();ctx.moveTo(x0, y+0.5);ctx.lineTo(x1, y+0.5);ctx.stroke();
-      ctx.fillText(v.toFixed(2), axisW-6, y);
-    }
-
-    // X-axis labels: only past -> now. Rightmost label = scenario "now"
-    var nowStr = (window.__scenarioNow || '9:28').trim();      // "H:MM"
-    var m = nowStr.match(/^(\d{1,2}):(\d{2})$/);
-    var Hh=9, Mm=28; if(m){ Hh=parseInt(m[1],10); Mm=parseInt(m[2],10); }
-    function fmt(h,m){ return h+':'+String(m).padStart(2,'0'); }
-    // Build 5 labels from T-4 to T (1-min steps)
-    var labels=[];
-    for(let i=4;i>=0;i--){
-      let tot = Hh*60+Mm - i;
-      let h=Math.floor(tot/60), mm=tot%60; if(mm<0){mm+=60;h--;}
-      labels.push(fmt(h,mm));
-    }
-    ctx.textAlign='center'; ctx.textBaseline='top';
-    for(let i=0;i<labels.length;i++){
-      const frac=i/(labels.length-1);
-      const x=x0 + frac*plotW;
-      ctx.fillText(labels[i], x, y1+4);
-    }
-  }
-})();
 </script>
