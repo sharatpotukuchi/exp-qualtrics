@@ -35,31 +35,31 @@ Qualtrics.SurveyEngine.addOnload(function () {
     pos_qty: F(9),
     pos_px: F(10),
     hot_condition: F(11),
-    treatment_group: F(12),
-    sentiment_pct: F(13),
-    session_tag: F(14),
-    news_head: F(15),
-    news_body: F(16),
-    news_img: F(17),
-    anchor_target: F(18),
-    fair_value: F(19),
-    default_order: F(20),
-    default_qty: F(21),
-    p_up: F(22),
-    up_ret: F(23),
-    down_ret: F(24),
-    timer_sec: F(25),
-    bias_focus: F(26),
-    allowed_sides: F(27),
-    default_side: F(28),
-    allow_shorting: F(29),
-    commission_bps: F(30),
-    slippage_bps: F(31),
-    close_method: F(32),
-    carry_forward: F(33),
-    tick_ms: F(34),
-    default_price: F(35),
-    narrative: F(36)
+    // treatment_group: F(12), // REMOVED - now handled by Randomizer ED field
+    sentiment_pct: F(12), // Shifted up from F(13)
+    session_tag: F(13), // Shifted up from F(14)
+    news_head: F(14), // Shifted up from F(15)
+    news_body: F(15), // Shifted up from F(16)
+    news_img: F(16), // Shifted up from F(17)
+    anchor_target: F(17), // Shifted up from F(18)
+    fair_value: F(18), // Shifted up from F(19)
+    default_order: F(19), // Shifted up from F(20)
+    default_qty: F(20), // Shifted up from F(21)
+    p_up: F(21), // Shifted up from F(22)
+    up_ret: F(22), // Shifted up from F(23)
+    down_ret: F(23), // Shifted up from F(24)
+    timer_sec: F(24), // Shifted up from F(25)
+    bias_focus: F(25), // Shifted up from F(26)
+    allowed_sides: F(26), // Shifted up from F(27)
+    default_side: F(27), // Shifted up from F(28)
+    allow_shorting: F(28), // Shifted up from F(29)
+    commission_bps: F(29), // Shifted up from F(30)
+    slippage_bps: F(30), // Shifted up from F(31)
+    close_method: F(31), // Shifted up from F(32)
+    carry_forward: F(32), // Shifted up from F(33)
+    tick_ms: F(33), // Shifted up from F(34)
+    default_price: F(34), // Shifted up from F(35)
+    narrative: F(35) // Shifted up from F(36)
   };
 
   Object.keys(map).forEach(function (k) {
@@ -1344,17 +1344,37 @@ Qualtrics.SurveyEngine.addOnReady(function () {
 
   if (timersEnabled) {
     var t = scenario.timer_sec;
-    jQuery('#timer').text(t);
+    jQuery('#timer-container').show();
+    updateTimerDisplay(t);
+    
     var intv = setInterval(function () {
       t--;
-      jQuery('#timer').text(t);
+      updateTimerDisplay(t);
+      
+      // Add visual warnings
+      if (t === 30) {
+        jQuery('#timer-container').css('background-color', '#fff3cd');
+        jQuery('#timer-container').css('border-color', '#ffc107');
+      } else if (t === 10) {
+        jQuery('#timer-container').css('background-color', '#f8d7da');
+        jQuery('#timer-container').css('border-color', '#dc3545');
+        jQuery('#timer').css('animation', 'pulse 0.5s infinite');
+      } else if (t <= 5) {
+        jQuery('#timer').css('animation', 'pulse 0.3s infinite');
+      }
+      
       if (t <= 0) {
         clearInterval(intv);
         autoSubmit('timeout');
       }
     }, 1000);
   } else {
-    jQuery('#timer').text('—');
+    jQuery('#timer-container').hide();
+  }
+
+  function updateTimerDisplay(seconds) {
+    var timerElement = jQuery('#timer');
+    timerElement.text(seconds);
   }
 
   // ===== order flow =====
@@ -1389,6 +1409,7 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   var allowShortingFlag = String(scenario.allow_shorting || '0') === '1';
   try {
     Qualtrics.SurveyEngine.setEmbeddedData('buy_allowed', buyAllowed ? '1' : '0');
+    Qualtrics.SurveyEngine.setEmbeddedData('sell_allowed', sellAllowed ? '1' : '0');
   } catch (e) {}
 
   // ===== One clean row: Side | Quantity | Order Type | Limit/Stop Price =====
@@ -1591,41 +1612,13 @@ Qualtrics.SurveyEngine.addOnReady(function () {
   function cleanAlpha(v) {
     return (v == null ? '' : String(v)).toLowerCase().replace(/[^a-z]/g, '');
   }
-  // Read treatment_group from Randomizer (for production) or Global ED (for testing)
-  // Use setTimeout to ensure Randomizer has executed first
-  var treatmentGroupValue = '';
+  // Read treatment_group from Randomizer ED field (for published survey)
+  var treatmentGroupValue = ED('treatment_group') || '';
   var forceNudge = /[?&]nudge=1(&|$)/.test(location.search) || ED('debug_force_nudge') === '1';
-  var shouldShowNudge = false;
+  var shouldShowNudge = (cleanAlpha(treatmentGroupValue) === 'nudge' || 
+                        cleanAlpha(treatmentGroupValue) === 'generic_nudge') || forceNudge;
   
-  var retryCount = 0;
-  var maxRetries = 5; // Stop after 1 second (5 * 200ms) - much faster for preview mode
-  
-  // TEMPORARY: Force nudge for testing in preview mode
-  var forceNudgeForTesting = true; // Set to false when done testing
-  
-  function checkTreatmentGroup() {
-    treatmentGroupValue = ED('treatment_group') || ED('treatment') || ED('group') || '';
-    console.log('TREATMENT: Checking treatment_group:', treatmentGroupValue, '(attempt', retryCount + 1, 'of', maxRetries + 1, ')');
-    
-    if (treatmentGroupValue && treatmentGroupValue.trim() !== '') {
-      shouldShowNudge = cleanAlpha(treatmentGroupValue) === 'nudge' || forceNudge;
-      console.log('TREATMENT: Successfully read from Randomizer:', treatmentGroupValue, 'shouldShowNudge:', shouldShowNudge);
-      return; // Stop retrying
-    } else if (retryCount < maxRetries) {
-      retryCount++;
-      // Try again after a short delay
-      setTimeout(checkTreatmentGroup, 200);
-    } else {
-      console.log('TREATMENT: Max retries reached, treatment_group still empty. Defaulting to control group.');
-      shouldShowNudge = forceNudge || forceNudgeForTesting; // Show nudge if forced OR for testing
-      if (forceNudgeForTesting) {
-        console.log('TREATMENT: TESTING MODE - Forcing nudge to appear');
-      }
-    }
-  }
-  
-  // Start checking after a delay to let Randomizer execute
-  setTimeout(checkTreatmentGroup, 500);
+  console.log('TREATMENT: Published survey - treatment_group:', treatmentGroupValue, 'shouldShowNudge:', shouldShowNudge);
 
   try {
     Qualtrics.SurveyEngine.setEmbeddedData('treatment_guard',
